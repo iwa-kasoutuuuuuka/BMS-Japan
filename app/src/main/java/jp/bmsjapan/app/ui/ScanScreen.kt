@@ -14,6 +14,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
 import jp.bmsjapan.app.protocol.PackMode
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -81,18 +83,26 @@ fun ScanScreen(vm: BmsViewModel) {
     var granted by remember { mutableStateOf(hasPermissions()) }
     var btOn by remember { mutableStateOf(vm.isBluetoothEnabled) }
 
+    // BLE が使えるようになったら、まず前回の機器への自動接続を試し、しなかったときだけスキャンする
+    fun onBleReady() {
+        if (!vm.autoConnectOnStart()) vm.startScan()
+    }
+
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         granted = hasPermissions()
-        if (granted && vm.isBluetoothEnabled) vm.startScan()
+        if (granted && vm.isBluetoothEnabled) onBleReady()
     }
     val btLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         btOn = vm.isBluetoothEnabled
-        if (btOn && granted) vm.startScan()
+        if (btOn && granted) onBleReady()
     }
 
     LaunchedEffect(Unit) {
-        if (granted && btOn) vm.startScan()
+        if (granted && btOn) onBleReady()
     }
+
+    val saved by vm.saved.collectAsState()
+    val autoConnect by vm.autoConnect.collectAsState()
 
     val mode by vm.mode.collectAsState()
     val adding by vm.adding.collectAsState()
@@ -138,6 +148,17 @@ fun ScanScreen(vm: BmsViewModel) {
                     onAction = { btLauncher.launch(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) },
                 )
                 else -> {
+                    val s = saved
+                    if (!adding && s != null) {
+                        SavedDevicesCard(
+                            modeLabel = stringResource(s.mode.label),
+                            names = s.devices.map { it.name },
+                            autoConnect = autoConnect,
+                            onConnect = vm::connectSaved,
+                            onForget = vm::forgetSaved,
+                            onAutoConnectChange = vm::setAutoConnect,
+                        )
+                    }
                     if (!adding) {
                         // つなぎ方は最初に選ぶ（追加中は変えない）
                         Text(stringResource(R.string.mode_title), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
@@ -224,6 +245,40 @@ private fun DeviceRow(device: FoundDevice, alreadyConnected: Boolean, onClick: (
                 if (alreadyConnected) stringResource(R.string.already_connected) else stringResource(R.string.rssi_format, device.rssi),
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+    }
+}
+
+@Composable
+private fun SavedDevicesCard(
+    modeLabel: String,
+    names: List<String>,
+    autoConnect: Boolean,
+    onConnect: () -> Unit,
+    onForget: () -> Unit,
+    onAutoConnectChange: (Boolean) -> Unit,
+) {
+    Card(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                stringResource(R.string.saved_title, modeLabel, names.size),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(names.joinToString("、"), style = MaterialTheme.typography.bodyMedium)
+            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = onConnect) { Text(stringResource(R.string.action_connect_saved)) }
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = onForget) { Text(stringResource(R.string.action_forget_saved)) }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.auto_connect_label), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Switch(checked = autoConnect, onCheckedChange = onAutoConnectChange)
+            }
         }
     }
 }

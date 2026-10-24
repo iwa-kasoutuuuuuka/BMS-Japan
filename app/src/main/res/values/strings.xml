@@ -47,6 +47,12 @@
     <string name="confirm_disconnect_all">接続中のBMSをすべて切断して、最初の画面に戻りますか？</string>
     <string name="msg_too_many_units">つなげるのは%1$s台までです</string>
 
+    <!-- 前回の機器・自動接続 -->
+    <string name="saved_title">前回つないだ機器（%1$s・%2$d台）</string>
+    <string name="action_connect_saved">接続する</string>
+    <string name="action_forget_saved">忘れる</string>
+    <string name="auto_connect_label">起動時に自動でつなぐ</string>
+
     <!-- 接続 -->
     <string name="status_connecting">接続中…</string>
     <string name="status_connected">接続済み</string>

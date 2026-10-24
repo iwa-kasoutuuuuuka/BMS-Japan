@@ -11,6 +11,9 @@ import jp.bmsjapan.app.ble.BmsConnection
 import jp.bmsjapan.app.ble.BmsScanner
 import jp.bmsjapan.app.ble.ConnectionState
 import jp.bmsjapan.app.ble.FoundDevice
+import jp.bmsjapan.app.data.SavedDevice
+import jp.bmsjapan.app.data.SavedDevicesCodec
+import jp.bmsjapan.app.data.SavedSetup
 import jp.bmsjapan.app.protocol.ActualCapacity
 import jp.bmsjapan.app.protocol.BatteryType
 import jp.bmsjapan.app.protocol.Modbus
@@ -37,6 +40,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -127,6 +131,79 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
     private val _units = MutableStateFlow<List<PackUnit>>(emptyList())
     val units: StateFlow<List<PackUnit>> = _units.asStateFlow()
 
+    // ---- 前回の機器と自動接続 ----
+    private val _saved = MutableStateFlow(SavedDevicesCodec.decode(prefs.getString(PREF_SAVED, null))?.takeIf { !it.isEmpty })
+    val saved: StateFlow<SavedSetup?> = _saved.asStateFlow()
+
+    private val _autoConnect = MutableStateFlow(prefs.getBoolean(PREF_AUTO_CONNECT, true))
+    val autoConnect: StateFlow<Boolean> = _autoConnect.asStateFlow()
+
+    private var autoConnectTried = false
+    private val retryJobs = mutableMapOf<String, Job>()
+
+    fun setAutoConnect(on: Boolean) {
+        _autoConnect.value = on
+        prefs.edit().putBoolean(PREF_AUTO_CONNECT, on).apply()
+    }
+
+    /** 今つないでいる機器を「前回の機器」として保存する */
+    private fun persistUnits() {
+        val list = _units.value
+        if (list.isEmpty()) return
+        val setup = SavedSetup(_mode.value, list.map { SavedDevice(it.address, it.name) })
+        _saved.value = setup
+        prefs.edit().putString(PREF_SAVED, SavedDevicesCodec.encode(setup)).apply()
+    }
+
+    fun forgetSaved() {
+        _saved.value = null
+        prefs.edit().remove(PREF_SAVED).apply()
+    }
+
+    /**
+     * 起動して BLE が使えるようになったときに 1 回だけ呼ぶ。
+     * 自動接続がオンで前回の機器があれば接続を始めて true を返す（このときはスキャンしない）。
+     */
+    fun autoConnectOnStart(): Boolean {
+        if (autoConnectTried) return false
+        autoConnectTried = true
+        if (!_autoConnect.value || _units.value.isNotEmpty()) return false
+        _saved.value ?: return false
+        connectSaved()
+        return true
+    }
+
+    /** 前回の機器にまとめて接続する（スキャンせず、アドレスで直接つなぐ） */
+    fun connectSaved() {
+        val setup = _saved.value ?: return
+        stopScan()
+        disconnectAll()
+        _mode.value = setup.mode
+        prefs.edit().putInt(PREF_MODE, setup.mode.code).apply()
+        _units.value = setup.devices.map { newUnit(it.address, it.name) }
+        setup.devices.forEach { watchForRetry(it.address) }
+        if (setup.mode == PackMode.SINGLE) setup.devices.firstOrNull()?.let { select(it.address) }
+    }
+
+    /**
+     * 電源が入っていない・離れているなどで接続に失敗したら、少し待ってつなぎ直す（最大 [AUTO_RETRY_COUNT] 回）。
+     * 一度つながったら見張りをやめる。
+     */
+    private fun watchForRetry(address: String) {
+        retryJobs.remove(address)?.cancel()
+        retryJobs[address] = viewModelScope.launch {
+            repeat(AUTO_RETRY_COUNT) {
+                val conn = _units.value.firstOrNull { it.address == address }?.connection ?: return@launch
+                val result = conn.state.first { it == ConnectionState.CONNECTED || it == ConnectionState.FAILED }
+                if (result == ConnectionState.CONNECTED) return@launch
+                delay(AUTO_RETRY_DELAY_MS)
+                if (_units.value.none { it.address == address }) return@launch
+                Log.i(TAG, "retry connecting $address (${it + 1}/$AUTO_RETRY_COUNT)")
+                reconnectUnit(address)
+            }
+        }
+    }
+
     /** 並列・直列で機器を追加するためにスキャン画面を開いているか */
     private val _adding = MutableStateFlow(false)
     val adding: StateFlow<Boolean> = _adding.asStateFlow()
@@ -187,6 +264,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
             disconnectAll()
             val unit = newUnit(device.address, name)
             _units.value = listOf(unit)
+            persistUnits()
             select(unit.address)
             return
         }
@@ -197,6 +275,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         _units.value = _units.value + newUnit(device.address, name)
+        persistUnits()
     }
 
     private fun newUnit(address: String, name: String) =
@@ -238,17 +317,23 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 1 台を外す。「前回の機器」からも外す */
     fun removeUnit(address: String) {
         val unit = _units.value.firstOrNull { it.address == address } ?: return
+        retryJobs.remove(address)?.cancel()
         unit.connection.close()
         if (_connection.value === unit.connection) {
             _connection.value = null
             resetSettingsState()
         }
         _units.value = _units.value - unit
+        if (_units.value.isEmpty()) forgetSaved() else persistUnits()
     }
 
+    /** すべて切断する。「前回の機器」は残す（次回の起動で自動接続できるように） */
     fun disconnectAll() {
+        retryJobs.values.forEach { it.cancel() }
+        retryJobs.clear()
         _units.value.forEach { it.connection.close() }
         _units.value = emptyList()
         _connection.value = null
@@ -470,6 +555,10 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val TAG = "BmsViewModel"
         const val PREF_MODE = "pack_mode"
+        const val PREF_SAVED = "saved_devices"
+        const val PREF_AUTO_CONNECT = "auto_connect"
+        const val AUTO_RETRY_COUNT = 3
+        const val AUTO_RETRY_DELAY_MS = 10_000L
 
         /** 念のための上限（127 レジスタ × 7 件 × 100 ページ = 700 件） */
         const val MAX_HISTORY_PAGES = 100
