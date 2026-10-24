@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BMS Japan</string>
+
+    <!-- スキャン画面 -->
+    <string name="title_scan">BMSを探す</string>
+    <string name="permission_needed">BMSを探して接続するには、Bluetoothの権限が必要です。</string>
+    <string name="action_allow">許可する</string>
+    <string name="bluetooth_off">Bluetoothがオフになっています。</string>
+    <string name="action_turn_on_bluetooth">Bluetoothの設定を開く</string>
+    <string name="scanning">探しています…</string>
+    <string name="scan_hint">接続するBMSをタップしてください</string>
+    <string name="action_scan">再スキャン</string>
+    <string name="action_stop">停止</string>
+    <string name="filter_show_all">BMS以外も表示</string>
+    <string name="filter_bms_only">BMSだけ表示</string>
+    <string name="scan_failed">スキャンできませんでした（%1$s）</string>
+    <string name="no_devices">BMSが見つかりません。電源とBluetoothの距離を確認してください。</string>
+    <string name="unknown_device">名前なし</string>
+    <string name="rssi_format">%1$d dBm</string>
+
+    <!-- 接続 -->
+    <string name="status_connecting">接続中…</string>
+    <string name="status_connected">接続済み</string>
+    <string name="status_disconnected">切断されました</string>
+    <string name="status_failed">接続できませんでした</string>
+    <string name="connecting">BMSに接続しています…</string>
+    <string name="waiting_data">データを待っています…</string>
+    <string name="connect_failed">接続できませんでした。BMSの電源を確認して、もう一度お試しください。</string>
+    <string name="disconnected">BMSとの接続が切れました。</string>
+    <string name="action_reconnect">再接続</string>
+    <string name="action_disconnect">切断して戻る</string>
+    <string name="action_refresh">今すぐ更新</string>
+    <string name="last_update">最終更新 %1$s（5秒ごとに自動更新）</string>
+
+    <!-- ライブデータ -->
+    <string name="state_charging">充電中</string>
+    <string name="state_discharging">放電中</string>
+    <string name="state_idle">待機中</string>
+    <string name="state_unknown">状態不明</string>
+    <string name="section_pack">バッテリー</string>
+    <string name="label_total_voltage">総電圧</string>
+    <string name="label_current">電流</string>
+    <string name="label_power">電力</string>
+    <string name="label_remaining">残り容量</string>
+    <string name="label_cycles">サイクル回数</string>
+    <string name="cycles_format">%1$d 回</string>
+    <string name="label_cell_count">セル数</string>
+    <string name="cells_format">%1$d セル</string>
+    <string name="section_switches">スイッチ</string>
+    <string name="label_charge_mos">充電MOS</string>
+    <string name="label_discharge_mos">放電MOS</string>
+    <string name="label_balancing">均等化</string>
+    <string name="on">ON</string>
+    <string name="off">OFF</string>
+    <string name="section_cells">セル電圧</string>
+    <string name="label_cell_max">最高</string>
+    <string name="label_cell_min">最低</string>
+    <string name="label_cell_avg">平均</string>
+    <string name="label_cell_delta">電圧差</string>
+    <string name="section_temperature">温度</string>
+    <string name="label_temp_max">最高温度</string>
+    <string name="label_temp_min">最低温度</string>
+    <string name="label_temp_sensor">センサー%1$d</string>
+    <string name="section_alarms">アラーム</string>
+    <string name="no_alarms">異常はありません</string>
+
+    <!-- アラーム（レジスタ58） -->
+    <string name="alarm_cell_ov1">セル過電圧（レベル1）</string>
+    <string name="alarm_cell_ov2">セル過電圧（レベル2）</string>
+    <string name="alarm_cell_uv1">セル低電圧（レベル1）</string>
+    <string name="alarm_cell_uv2">セル低電圧（レベル2）</string>
+    <string name="alarm_pack_ov1">総電圧が高い（レベル1）</string>
+    <string name="alarm_pack_ov2">総電圧が高い（レベル2）</string>
+    <string name="alarm_pack_uv1">総電圧が低い（レベル1）</string>
+    <string name="alarm_pack_uv2">総電圧が低い（レベル2）</string>
+    <string name="alarm_chg_ot1">充電時の温度が高い（レベル1）</string>
+    <string name="alarm_chg_ot2">充電時の温度が高い（レベル2）</string>
+    <string name="alarm_chg_ut1">充電時の温度が低い（レベル1）</string>
+    <string name="alarm_chg_ut2">充電時の温度が低い（レベル2）</string>
+    <string name="alarm_dsg_ot1">放電時の温度が高い（レベル1）</string>
+    <string name="alarm_dsg_ot2">放電時の温度が高い（レベル2）</string>
+    <string name="alarm_dsg_ut1">放電時の温度が低い（レベル1）</string>
+    <string name="alarm_dsg_ut2">放電時の温度が低い（レベル2）</string>
+    <!-- アラーム（レジスタ59） -->
+    <string name="alarm_chg_oc1">充電過電流（レベル1）</string>
+    <string name="alarm_chg_oc2">充電過電流（レベル2）</string>
+    <string name="alarm_dsg_oc1">放電過電流（レベル1）</string>
+    <string name="alarm_dsg_oc2">放電過電流（レベル2）</string>
+    <string name="alarm_soc_high1">SOCが高い（レベル1）</string>
+    <string name="alarm_soc_high2">SOCが高い（レベル2）</string>
+    <string name="alarm_soc_low1">SOCが低い（レベル1）</string>
+    <string name="alarm_soc_low2">SOCが低い（レベル2）</string>
+    <string name="alarm_vdiff1">セル電圧差が大きい（レベル1）</string>
+    <string name="alarm_vdiff2">セル電圧差が大きい（レベル2）</string>
+    <string name="alarm_tdiff1">温度差が大きい（レベル1）</string>
+    <string name="alarm_tdiff2">温度差が大きい（レベル2）</string>
+    <!-- アラーム（レジスタ60） -->
+    <string name="alarm_chg_mos_ot">充電MOSの過熱</string>
+    <string name="alarm_dsg_mos_ot">放電MOSの過熱</string>
+    <string name="alarm_chg_mos_sensor">充電MOSの温度センサー異常</string>
+    <string name="alarm_dsg_mos_sensor">放電MOSの温度センサー異常</string>
+    <string name="alarm_chg_mos_weld">充電MOSの溶着</string>
+    <string name="alarm_dsg_mos_weld">放電MOSの溶着</string>
+    <string name="alarm_chg_mos_short">充電MOSの短絡</string>
+    <string name="alarm_dsg_mos_short">放電MOSの短絡</string>
+    <string name="alarm_afe">AFEチップの異常</string>
+    <string name="alarm_cell_wire">セル電圧線の外れ</string>
+    <string name="alarm_temp_sensor">温度センサーの異常</string>
+    <string name="alarm_eeprom">EEPROMの異常</string>
+    <string name="alarm_rtc">時計（RTC）の異常</string>
+    <string name="alarm_precharge">プリチャージ失敗</string>
+    <string name="alarm_vehicle_comm">車両との通信異常</string>
+    <string name="alarm_internal_comm">内部通信の異常</string>
+    <!-- アラーム（レジスタ61） -->
+    <string name="alarm_current_module">電流計測モジュールの異常</string>
+    <string name="alarm_voltage_module">総電圧計測モジュールの異常</string>
+    <string name="alarm_short_circuit">短絡保護</string>
+    <string name="alarm_low_v_no_charge">電圧が低いため充電禁止</string>
+    <string name="alarm_gps_soft_switch">GPSソフトスイッチ</string>
+    <string name="alarm_charger_removed">充電器が外れました</string>
+    <string name="alarm_thermal_runaway">熱暴走</string>
+    <string name="alarm_balancer_comm">均等化モジュールとの通信異常</string>
+    <string name="alarm_balance_condition">均等化の条件を満たしていません</string>
+</resources>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 白いバッテリーに 4 つのそろったセル（＝均等化）と、日本を表す赤い丸 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:pivotX="54" android:pivotY="54" android:scaleX="0.85" android:scaleY="0.85" android:translateY="4">
+        <!-- バッテリー本体 -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="4"
+            android:pathData="M31,40 L73,40 Q78,40 78,45 L78,67 Q78,72 73,72 L31,72 Q26,72 26,67 L26,45 Q26,40 31,40 Z" />
+        <!-- 端子 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M80,49 L83,49 Q85,49 85,51 L85,61 Q85,63 83,63 L80,63 Z" />
+        <!-- セル 4 本 -->
+        <path android:fillColor="#4CAF50" android:pathData="M32,46 L40,46 L40,66 L32,66 Z" />
+        <path android:fillColor="#4CAF50" android:pathData="M42.7,46 L50.7,46 L50.7,66 L42.7,66 Z" />
+        <path android:fillColor="#4CAF50" android:pathData="M53.3,46 L61.3,46 L61.3,66 L53.3,66 Z" />
+        <path android:fillColor="#4CAF50" android:pathData="M64,46 L72,46 L72,66 L64,66 Z" />
+    </group>
+    <!-- 赤い丸 -->
+    <path
+        android:fillColor="#E53935"
+        android:strokeColor="#0D2B45"
+        android:strokeWidth="2.5"
+        android:pathData="M66,34 m-7,0 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0" />
+</vector>
