@@ -90,6 +90,46 @@ class ProtocolTest {
         assertEquals(listOf(BmsFrame.ReadResponse(intArrayOf(7, 7))), got)
     }
 
+    // ---- 実容量（スレーブ 0x81、応答は 0x51） ----
+
+    @Test fun actualCapacityReadFrame() =
+        // docs/ble_protocol.md の送信例と同じ
+        assertEquals("8103010B0002ABF5", Modbus.readRegisters(ActualCapacity.REGISTER, 2, Modbus.SLAVE_AUX).toHex())
+
+    @Test fun actualCapacityWriteFrame() {
+        // 元アプリ: "8110" + "010B" + "0002" + %08X(mAh) + CRC
+        val hex = Modbus.writeRegisters(ActualCapacity.REGISTER, ActualCapacity.encode(280_000), Modbus.SLAVE_AUX).toHex()
+        assertTrue(hex.startsWith("8110010B0002000445C0"))
+        assertEquals(12, hex.length / 2)   // 2 + 4 + 4 + 2（バイト数フィールドなし）
+    }
+
+    @Test fun actualCapacityReplyParsed() {
+        val reply = Modbus.withCrc("510304000445C0".hexToBytes())
+        val got = FrameAssembler().feed(reply)
+        assertEquals(listOf(BmsFrame.ReadResponse(intArrayOf(0x0004, 0x45C0), Modbus.SLAVE_AUX_REPLY)), got)
+        assertEquals(280_000, ActualCapacity.decode((got[0] as BmsFrame.ReadResponse).registers))
+    }
+
+    @Test fun actualCapacityReplyAcceptedEvenWithBadCrc() {
+        // 元アプリは 0x51 の応答の CRC を確認していないので、こちらも受け付ける
+        val reply = "510304000445C00000".hexToBytes()
+        val got = FrameAssembler().feed(reply)
+        assertEquals(1, got.size)
+    }
+
+    @Test fun actualCapacityWriteAck() {
+        val ack = Modbus.withCrc("5110010B0002".hexToBytes())
+        assertEquals(listOf(BmsFrame.WriteMultiAck(267, 2, Modbus.SLAVE_AUX_REPLY)), FrameAssembler().feed(ack))
+    }
+
+    @Test fun actualCapacityInput() {
+        assertEquals(280_000, ActualCapacity.parse("280"))
+        assertEquals(105_500, ActualCapacity.parse("105,5"))
+        assertEquals(null, ActualCapacity.parse("0.5"))
+        assertEquals(null, ActualCapacity.parse("abc"))
+        assertEquals("280.0", ActualCapacity.format(280_000))
+    }
+
     @Test fun extraCellsAppended() {
         val r = sampleLiveRegisters().also { it[49] = 34; for (i in 16 until 32) it[i] = 3310 }
         val d = LiveData.parse(r).withExtraCells(IntArray(16) { 3290 })

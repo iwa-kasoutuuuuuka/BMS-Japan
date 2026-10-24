@@ -8,6 +8,15 @@ object Modbus {
     /** BMS 本体のスレーブアドレス */
     const val SLAVE_BMS: Int = 0xD2
 
+    /** 実容量など一部の値はこのアドレスに問い合わせる */
+    const val SLAVE_AUX: Int = 0x81
+
+    /** 0x81 への問い合わせには 0x51 で応答が返る（元アプリは応答の先頭 "5103"/"5110" で判別している） */
+    const val SLAVE_AUX_REPLY: Int = 0x51
+
+    /** 問い合わせ先から、応答に使われるアドレスを返す */
+    fun replySlaves(slave: Int): Set<Int> = if (slave == SLAVE_AUX) setOf(SLAVE_AUX_REPLY, SLAVE_AUX) else setOf(slave)
+
     const val FN_READ: Int = 0x03
     const val FN_WRITE_SINGLE: Int = 0x06
     const val FN_WRITE_MULTI: Int = 0x10

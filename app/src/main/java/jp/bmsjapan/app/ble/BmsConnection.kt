@@ -173,7 +173,7 @@ class BmsConnection(
             val now = LocalDateTime.now()
             runCatching {
                 transaction(BmsCommands.syncTime(now.year, now.monthValue, now.dayOfMonth, now.hour, now.minute, now.second)) {
-                    it is BmsFrame.WriteMultiAck && it.start == 212
+                    it is BmsFrame.WriteMultiAck && it.slave == Modbus.SLAVE_BMS && it.start == 212
                 }
             }.onFailure { Log.w(TAG, "time sync not acknowledged", it) }
 
@@ -216,7 +216,7 @@ class BmsConnection(
 
     /** 運転データを読む。33 セル以上なら追加分も読む */
     suspend fun refreshLive() {
-        var data = LiveData.parse(readRegisters(0, LiveData.REGISTER_COUNT))
+        var data = LiveData.parse(readRegisters(0, LiveData.REGISTER_COUNT, Modbus.SLAVE_BMS))
         if (data.cellCount > 32) {
             runCatching { data = data.withExtraCells(readRegisters(71, 16)) }
         }
@@ -225,24 +225,27 @@ class BmsConnection(
     }
 
     /** 保持レジスタを読む */
-    suspend fun readRegisters(start: Int, count: Int): IntArray {
-        val frame = transaction(Modbus.readRegisters(start, count)) {
-            it is BmsFrame.ReadResponse && it.registers.size == count
+    suspend fun readRegisters(start: Int, count: Int, slave: Int = Modbus.SLAVE_BMS): IntArray {
+        val replyFrom = Modbus.replySlaves(slave)
+        val frame = transaction(Modbus.readRegisters(start, count, slave)) {
+            it is BmsFrame.ReadResponse && it.slave in replyFrom && it.registers.size == count
         }
         return (frame as BmsFrame.ReadResponse).registers
     }
 
     /** 1 レジスタ書き込み。BMS が同じ値をエコーで返したら成功 */
-    suspend fun writeRegister(register: Int, value: Int) {
-        transaction(Modbus.writeRegister(register, value)) {
-            it is BmsFrame.WriteSingleAck && it.register == register && it.value == value
+    suspend fun writeRegister(register: Int, value: Int, slave: Int = Modbus.SLAVE_BMS) {
+        val replyFrom = Modbus.replySlaves(slave)
+        transaction(Modbus.writeRegister(register, value, slave)) {
+            it is BmsFrame.WriteSingleAck && it.slave in replyFrom && it.register == register && it.value == value
         }
     }
 
     /** 複数レジスタ書き込み */
-    suspend fun writeRegisters(start: Int, values: IntArray) {
-        transaction(Modbus.writeRegisters(start, values)) {
-            it is BmsFrame.WriteMultiAck && it.start == start && it.count == values.size
+    suspend fun writeRegisters(start: Int, values: IntArray, slave: Int = Modbus.SLAVE_BMS) {
+        val replyFrom = Modbus.replySlaves(slave)
+        transaction(Modbus.writeRegisters(start, values, slave)) {
+            it is BmsFrame.WriteMultiAck && it.slave in replyFrom && it.start == start && it.count == values.size
         }
     }
 

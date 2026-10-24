@@ -10,7 +10,9 @@ import jp.bmsjapan.app.ble.BmsConnection
 import jp.bmsjapan.app.ble.BmsScanner
 import jp.bmsjapan.app.ble.ConnectionState
 import jp.bmsjapan.app.ble.FoundDevice
+import jp.bmsjapan.app.protocol.ActualCapacity
 import jp.bmsjapan.app.protocol.BatteryType
+import jp.bmsjapan.app.protocol.Modbus
 import jp.bmsjapan.app.protocol.BmsPassword
 import jp.bmsjapan.app.protocol.BmsSettings
 import jp.bmsjapan.app.protocol.HistoryProtocol
@@ -172,6 +174,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         devicePassword = null
         _access.value = SettingsAccess.CheckingPassword
         _settings.value = null
+        _actualCapacityMah.value = null
         _busy.value = false
     }
 
@@ -215,6 +218,10 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
                 // 均等化の設定は機種によって無いことがあるので、失敗しても続ける
                 runCatching { s = s.merge(BmsSettings.BALANCE_START, c.readRegisters(BmsSettings.BALANCE_START, BmsSettings.BALANCE_COUNT)) }
                 _settings.value = s
+                // 実容量は別アドレス（0x81）。対応していない機種もあるので失敗しても続ける
+                _actualCapacityMah.value = runCatching {
+                    ActualCapacity.decode(c.readRegisters(ActualCapacity.REGISTER, ActualCapacity.COUNT, Modbus.SLAVE_AUX))
+                }.onFailure { Log.w(TAG, "actual capacity not available", it) }.getOrNull()
             } catch (e: Exception) {
                 Log.w(TAG, "settings read failed", e)
                 _messages.tryEmit(UiMessage(R.string.msg_read_failed))
@@ -230,6 +237,14 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setSwitch(sw: SwitchSetting, on: Boolean) = runWrite { c ->
         c.writeRegister(sw.register, if (on) 1 else 0)
+    }
+
+    /** 実容量（mAh）。読めなかったときは null */
+    private val _actualCapacityMah = MutableStateFlow<Int?>(null)
+    val actualCapacityMah: StateFlow<Int?> = _actualCapacityMah.asStateFlow()
+
+    fun writeActualCapacity(mAh: Int) = runWrite { c ->
+        c.writeRegisters(ActualCapacity.REGISTER, ActualCapacity.encode(mAh), Modbus.SLAVE_AUX)
     }
 
     fun applyBatteryType(type: BatteryType) {

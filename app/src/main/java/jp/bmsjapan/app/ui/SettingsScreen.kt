@@ -45,6 +45,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import jp.bmsjapan.app.R
+import jp.bmsjapan.app.protocol.ActualCapacity
 import jp.bmsjapan.app.protocol.BatteryType
 import jp.bmsjapan.app.protocol.BmsSettings
 import jp.bmsjapan.app.protocol.LiveData
@@ -117,6 +118,8 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
     var confirmSwitch by remember { mutableStateOf<Pair<SwitchSetting, Boolean>?>(null) }
     var choosingBattery by remember { mutableStateOf(false) }
     var changingPassword by remember { mutableStateOf(false) }
+    var editingActualCapacity by remember { mutableStateOf(false) }
+    val actualCapacity by vm.actualCapacityMah.collectAsState()
 
     val s = settings
     Column(Modifier.fillMaxSize()) {
@@ -183,6 +186,18 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
             SettingGroup.entries.forEach { group ->
                 val items = Setting.entries.filter { it.group == group }
                 Section(stringResource(group.title)) {
+                    if (group == SettingGroup.BATTERY) {
+                        // 実容量は別アドレス（0x81）の 32bit 値なので、ここだけ個別に扱う
+                        val mAh = actualCapacity
+                        SettingRow(
+                            label = stringResource(R.string.set_actual_capacity),
+                            value = mAh?.let { "${ActualCapacity.format(it)} Ah" } ?: "--",
+                            caption = if (mAh == null) stringResource(R.string.actual_capacity_unavailable) else null,
+                            enabled = mAh != null && !busy,
+                            onClick = { editingActualCapacity = true },
+                        )
+                        HorizontalDivider()
+                    }
                     items.forEachIndexed { i, setting ->
                         if (i > 0) HorizontalDivider()
                         val value = s[setting]
@@ -224,6 +239,18 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
                 }) { Text(stringResource(if (on) R.string.action_turn_on else R.string.action_turn_off)) }
             },
             dismissButton = { TextButton(onClick = { confirmSwitch = null }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
+
+    if (editingActualCapacity) {
+        EditActualCapacityDialog(
+            currentMah = actualCapacity,
+            ratedAh = s?.get(Setting.RATED_CAPACITY),
+            onDismiss = { editingActualCapacity = false },
+            onConfirm = { mAh ->
+                editingActualCapacity = false
+                vm.writeActualCapacity(mAh)
+            },
         )
     }
 
@@ -326,6 +353,48 @@ private fun EditSettingDialog(setting: Setting, settings: BmsSettings, onDismiss
                     is ValidationResult.MustBeAbove -> error = aboveFmt.format(r.release)
                     is ValidationResult.MustBeBelow -> error = belowFmt.format(r.release)
                 }
+            }) { Text(stringResource(R.string.action_write)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
+@Composable
+private fun EditActualCapacityDialog(currentMah: Int?, ratedAh: Double?, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+    var input by remember { mutableStateOf(currentMah?.let(ActualCapacity::format) ?: "") }
+    var error by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.set_actual_capacity)) },
+        text = {
+            Column {
+                currentMah?.let { Text(stringResource(R.string.current_value, "${ActualCapacity.format(it)} Ah")) }
+                ratedAh?.let {
+                    Text(stringResource(R.string.actual_capacity_rated, "%.1f Ah".format(it)), style = MaterialTheme.typography.bodySmall)
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it; error = false },
+                    label = { Text(stringResource(R.string.new_value)) },
+                    suffix = { Text("Ah") },
+                    singleLine = true,
+                    isError = error,
+                    supportingText = {
+                        Text(
+                            if (error) stringResource(R.string.error_range, "%.1f".format(ActualCapacity.MIN_AH), "%.1f".format(ActualCapacity.MAX_AH))
+                            else stringResource(R.string.allowed_range, "%.1f".format(ActualCapacity.MIN_AH), "%.1f".format(ActualCapacity.MAX_AH), "Ah"),
+                        )
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                )
+                Text(stringResource(R.string.actual_capacity_note), style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val mAh = ActualCapacity.parse(input)
+                if (mAh == null) error = true else onConfirm(mAh)
             }) { Text(stringResource(R.string.action_write)) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },

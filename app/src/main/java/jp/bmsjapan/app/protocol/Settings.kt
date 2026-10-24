@@ -179,6 +179,30 @@ fun buildBatteryPreset(type: BatteryType, cellCount: Int, current: BmsSettings):
     return values
 }
 
+/**
+ * 実容量（スレーブ 0x81 のレジスタ 267〜268、32bit、mAh）。
+ * 画面では Ah で扱う。
+ */
+object ActualCapacity {
+    const val REGISTER = 267
+    const val COUNT = 2
+    const val MIN_AH = 1.0
+    const val MAX_AH = 2000.0
+
+    fun decode(regs: IntArray): Int = (regs[0] shl 16) or regs[1]
+
+    fun encode(mAh: Int): IntArray = intArrayOf((mAh ushr 16) and 0xFFFF, mAh and 0xFFFF)
+
+    fun format(mAh: Int): String = "%.1f".format(mAh / 1000.0)
+
+    /** 入力（Ah）を確認して mAh を返す。だめなら null */
+    fun parse(input: String): Int? {
+        val ah = input.trim().replace(',', '.').toDoubleOrNull() ?: return null
+        if (ah < MIN_AH - 1e-9 || ah > MAX_AH + 1e-9) return null
+        return (ah * 1000).roundToInt()
+    }
+}
+
 /** パスワード（レジスタ 201〜203、ASCII 6 文字） */
 object BmsPassword {
     const val START = 201

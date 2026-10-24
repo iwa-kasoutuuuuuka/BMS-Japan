@@ -145,6 +145,12 @@
     <string name="msg_write_failed">設定できませんでした（BMSから応答がありません）</string>
     <string name="msg_read_failed">設定値を読み出せませんでした</string>
 
+    <!-- 設定: 実容量 -->
+    <string name="set_actual_capacity">実容量</string>
+    <string name="actual_capacity_unavailable">このBMSからは読み出せませんでした</string>
+    <string name="actual_capacity_rated">定格容量: %1$s</string>
+    <string name="actual_capacity_note">実際に使える容量です。劣化した電池や、容量を測り直したときに合わせます。SOCや残り容量の計算に使われます。</string>
+
     <!-- 設定: パスワードの変更 -->
     <string name="group_security">セキュリティ</string>
     <string name="label_change_password">パスワードの変更</string>
