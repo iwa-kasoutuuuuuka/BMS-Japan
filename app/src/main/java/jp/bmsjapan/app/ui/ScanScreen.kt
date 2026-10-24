@@ -5,7 +5,16 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import jp.bmsjapan.app.protocol.PackMode
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -85,8 +94,31 @@ fun ScanScreen(vm: BmsViewModel) {
         if (granted && btOn) vm.startScan()
     }
 
+    val mode by vm.mode.collectAsState()
+    val adding by vm.adding.collectAsState()
+    val units by vm.units.collectAsState()
+    val connected = units.map { it.address }.toSet()
+
+    if (adding) BackHandler { vm.stopAdding() }
+
     Scaffold(
-        topBar = { TopAppBar(title = { Text(stringResource(R.string.title_scan)) }) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        if (adding) stringResource(R.string.title_add_unit, units.size, mode.maxUnits)
+                        else stringResource(R.string.title_scan),
+                    )
+                },
+                navigationIcon = {
+                    if (adding) {
+                        IconButton(onClick = vm::stopAdding) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
+                        }
+                    }
+                },
+            )
+        },
     ) { padding ->
         Column(
             Modifier
@@ -106,6 +138,28 @@ fun ScanScreen(vm: BmsViewModel) {
                     onAction = { btLauncher.launch(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) },
                 )
                 else -> {
+                    if (!adding) {
+                        // つなぎ方は最初に選ぶ（追加中は変えない）
+                        Text(stringResource(R.string.mode_title), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
+                        SingleChoiceSegmentedButtonRow(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                        ) {
+                            PackMode.entries.forEachIndexed { i, m ->
+                                SegmentedButton(
+                                    selected = mode == m,
+                                    onClick = { vm.setMode(m) },
+                                    shape = SegmentedButtonDefaults.itemShape(i, PackMode.entries.size),
+                                ) { Text(stringResource(m.label)) }
+                            }
+                        }
+                        Text(
+                            stringResource(if (mode == PackMode.SINGLE) R.string.mode_hint_single else R.string.mode_hint_multi, mode.maxUnits),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -139,7 +193,10 @@ fun ScanScreen(vm: BmsViewModel) {
                         contentPadding = PaddingValues(vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        items(shown, key = { it.address }) { d -> DeviceRow(d) { vm.connect(d) } }
+                        items(shown, key = { it.address }) { d ->
+                            val already = d.address in connected
+                            DeviceRow(d, already) { if (!already) vm.connect(d) }
+                        }
                     }
                 }
             }
@@ -148,11 +205,11 @@ fun ScanScreen(vm: BmsViewModel) {
 }
 
 @Composable
-private fun DeviceRow(device: FoundDevice, onClick: () -> Unit) {
+private fun DeviceRow(device: FoundDevice, alreadyConnected: Boolean, onClick: () -> Unit) {
     Card(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .clickable(enabled = !alreadyConnected, onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = if (device.looksLikeBms) MaterialTheme.colorScheme.primaryContainer
             else MaterialTheme.colorScheme.surfaceVariant,
@@ -163,7 +220,10 @@ private fun DeviceRow(device: FoundDevice, onClick: () -> Unit) {
                 Text(device.name ?: stringResource(R.string.unknown_device), fontWeight = FontWeight.Bold)
                 Text(device.address, style = MaterialTheme.typography.bodySmall)
             }
-            Text(stringResource(R.string.rssi_format, device.rssi), style = MaterialTheme.typography.bodySmall)
+            Text(
+                if (alreadyConnected) stringResource(R.string.already_connected) else stringResource(R.string.rssi_format, device.rssi),
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
     }
 }

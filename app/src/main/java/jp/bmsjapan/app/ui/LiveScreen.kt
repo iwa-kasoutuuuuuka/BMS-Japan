@@ -80,7 +80,7 @@ fun DeviceScreen(vm: BmsViewModel) {
         vm.messages.collect { m -> snackbar.showSnackbar(context.getString(m.res, m.arg)) }
     }
 
-    BackHandler { if (tab != 0) tab = 0 else vm.disconnect() }
+    BackHandler { if (tab != 0) tab = 0 else vm.closeDevice() }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -117,7 +117,7 @@ fun DeviceScreen(vm: BmsViewModel) {
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = vm::disconnect) {
+                    IconButton(onClick = vm::closeDevice) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_disconnect))
                     }
                 },

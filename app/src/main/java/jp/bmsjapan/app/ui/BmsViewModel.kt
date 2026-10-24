@@ -1,6 +1,7 @@
 package jp.bmsjapan.app.ui
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
@@ -18,6 +19,8 @@ import jp.bmsjapan.app.protocol.BmsSettings
 import jp.bmsjapan.app.protocol.HistoryProtocol
 import jp.bmsjapan.app.protocol.HistoryRecord
 import jp.bmsjapan.app.protocol.LiveData
+import jp.bmsjapan.app.protocol.PackMode
+import jp.bmsjapan.app.protocol.PackSummary
 import jp.bmsjapan.app.protocol.PasswordChangeCheck
 import jp.bmsjapan.app.protocol.Setting
 import jp.bmsjapan.app.protocol.SwitchSetting
@@ -33,6 +36,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -105,12 +109,59 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         _scanning.value = false
     }
 
-    // ---- 接続 ----
+    // ---- つなぎ方（単体・並列・直列） ----
+    private val prefs = app.getSharedPreferences("bms_japan", Context.MODE_PRIVATE)
+
+    private val _mode = MutableStateFlow(PackMode.fromCode(prefs.getInt(PREF_MODE, PackMode.SINGLE.code)))
+    val mode: StateFlow<PackMode> = _mode.asStateFlow()
+
+    /** つなぎ方を変える。今の台数が新しい上限を超えるときは全部切断する */
+    fun setMode(m: PackMode) {
+        if (m == _mode.value) return
+        if (_units.value.size > m.maxUnits) disconnectAll()
+        _mode.value = m
+        prefs.edit().putInt(PREF_MODE, m.code).apply()
+    }
+
+    // ---- 接続中の機器 ----
+    private val _units = MutableStateFlow<List<PackUnit>>(emptyList())
+    val units: StateFlow<List<PackUnit>> = _units.asStateFlow()
+
+    /** 並列・直列で機器を追加するためにスキャン画面を開いているか */
+    private val _adding = MutableStateFlow(false)
+    val adding: StateFlow<Boolean> = _adding.asStateFlow()
+
+    fun startAdding() {
+        _adding.value = true
+    }
+
+    fun stopAdding() {
+        stopScan()
+        _adding.value = false
+    }
+
+    /** 詳細画面（ライブ・履歴・設定）で開いている機器 */
     private val _connection = MutableStateFlow<BmsConnection?>(null)
     val connection: StateFlow<BmsConnection?> = _connection.asStateFlow()
 
-    private val _selectedName = MutableStateFlow<String?>(null)
-    val selectedName: StateFlow<String?> = _selectedName.asStateFlow()
+    val selectedName: StateFlow<String?> = combine(_connection, _units) { c, list ->
+        list.firstOrNull { it.connection === c }?.name
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** 全台の状態（一覧・合計の表示用） */
+    val unitStatuses: StateFlow<List<UnitStatus>> = _units
+        .flatMapLatest { list ->
+            if (list.isEmpty()) flowOf(emptyList())
+            else combine(list.map { u ->
+                combine(u.connection.state, u.connection.live) { s, l -> UnitStatus(u.address, u.name, s, l) }
+            }) { it.toList() }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 接続済みでデータが届いている台だけをまとめた値 */
+    val pack: StateFlow<PackSummary?> = combine(unitStatuses, _mode) { list, m ->
+        PackSummary.of(m, list.filter { it.state == ConnectionState.CONNECTED }.mapNotNull { it.live })
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val connectionState: StateFlow<ConnectionState?> = _connection
         .flatMapLatest { it?.state ?: flowOf(null) }
@@ -124,33 +175,90 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         .flatMapLatest { it?.lastUpdate ?: flowOf(null) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    /**
+     * スキャン画面で機器をタップしたとき。
+     * - 単体: 今の接続を切って、その機器の詳細画面を開く
+     * - 並列・直列: 一覧に追加する（最大 6 台）
+     */
     fun connect(device: FoundDevice) {
         stopScan()
-        _selectedName.value = device.name ?: device.address
-        replaceConnection(device.address)
+        val name = device.name ?: device.address
+        if (_mode.value == PackMode.SINGLE) {
+            disconnectAll()
+            val unit = newUnit(device.address, name)
+            _units.value = listOf(unit)
+            select(unit.address)
+            return
+        }
+        _adding.value = false
+        if (_units.value.any { it.address == device.address }) return
+        if (_units.value.size >= _mode.value.maxUnits) {
+            _messages.tryEmit(UiMessage(R.string.msg_too_many_units, _mode.value.maxUnits.toString()))
+            return
+        }
+        _units.value = _units.value + newUnit(device.address, name)
     }
 
+    private fun newUnit(address: String, name: String) =
+        PackUnit(address, name, BmsConnection(getApplication(), address).also { it.connect() })
+
+    /** 一覧から 1 台を選んで詳細画面を開く */
+    fun select(address: String) {
+        val unit = _units.value.firstOrNull { it.address == address } ?: return
+        if (_connection.value !== unit.connection) resetSettingsState()
+        _connection.value = unit.connection
+    }
+
+    /** 詳細画面を閉じる。単体なら切断、並列・直列なら一覧に戻る */
+    fun closeDevice() {
+        if (_mode.value == PackMode.SINGLE) {
+            disconnectAll()
+        } else {
+            _connection.value = null
+            resetSettingsState()
+        }
+    }
+
+    /** 開いている機器をつなぎ直す */
     fun reconnect() {
         val address = _connection.value?.address ?: return
-        replaceConnection(address)
+        reconnectUnit(address)
+        select(address)
     }
 
-    private fun replaceConnection(address: String) {
-        _connection.value?.close()
+    /** 指定した機器をつなぎ直す（接続オブジェクトを作り直す） */
+    fun reconnectUnit(address: String) {
+        val old = _units.value.firstOrNull { it.address == address } ?: return
+        old.connection.close()
+        val fresh = newUnit(address, old.name)
+        _units.value = _units.value.map { if (it.address == address) fresh else it }
+        if (_connection.value === old.connection) {
+            resetSettingsState()
+            _connection.value = fresh.connection
+        }
+    }
+
+    fun removeUnit(address: String) {
+        val unit = _units.value.firstOrNull { it.address == address } ?: return
+        unit.connection.close()
+        if (_connection.value === unit.connection) {
+            _connection.value = null
+            resetSettingsState()
+        }
+        _units.value = _units.value - unit
+    }
+
+    fun disconnectAll() {
+        _units.value.forEach { it.connection.close() }
+        _units.value = emptyList()
+        _connection.value = null
+        _adding.value = false
         resetSettingsState()
-        _connection.value = BmsConnection(getApplication(), address).also { it.connect() }
     }
 
     fun refreshNow() {
         val c = _connection.value ?: return
         viewModelScope.launch { runCatching { c.refreshLive() } }
-    }
-
-    fun disconnect() {
-        _connection.value?.close()
-        _connection.value = null
-        _selectedName.value = null
-        resetSettingsState()
     }
 
     // ---- 設定 ----
@@ -356,16 +464,23 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
-        _connection.value?.close()
+        _units.value.forEach { it.connection.close() }
     }
 
     private companion object {
         const val TAG = "BmsViewModel"
+        const val PREF_MODE = "pack_mode"
 
         /** 念のための上限（127 レジスタ × 7 件 × 100 ページ = 700 件） */
         const val MAX_HISTORY_PAGES = 100
     }
 }
+
+/** 接続中の 1 台 */
+data class PackUnit(val address: String, val name: String, val connection: BmsConnection)
+
+/** 一覧表示用の 1 台の状態 */
+data class UnitStatus(val address: String, val name: String, val state: ConnectionState, val live: LiveData?)
 
 data class HistoryState(
     val records: List<HistoryRecord> = emptyList(),

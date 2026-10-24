@@ -19,6 +19,34 @@
     <string name="unknown_device">名前なし</string>
     <string name="rssi_format">%1$d dBm</string>
 
+    <!-- つなぎ方（単体・並列・直列） -->
+    <string name="mode_title">つなぎ方</string>
+    <string name="mode_single">単体</string>
+    <string name="mode_parallel">並列</string>
+    <string name="mode_series">直列</string>
+    <string name="mode_hint_single">BMSを1台だけつなぎます。</string>
+    <string name="mode_hint_multi">BMSを最大%1$d台までつなぎ、まとめて表示します。</string>
+    <string name="title_add_unit">BMSを追加（%1$d／%2$d台）</string>
+    <string name="already_connected">接続済み</string>
+    <string name="action_back">戻る</string>
+    <string name="pack_title">%1$s（%2$d台）</string>
+    <string name="pack_units">各BMS</string>
+    <string name="pack_partial">%1$d／%2$d台のデータで計算しています（接続中・未接続の台があります）</string>
+    <string name="pack_soc_note_parallel">SOCは各台の平均、電流と残り容量は合計です</string>
+    <string name="pack_soc_note_series">SOCと残り容量は最も少ない台、電圧は合計です</string>
+    <string name="pack_cell_range">セル電圧（最低〜最高）</string>
+    <string name="pack_temp_range">温度（最低〜最高）</string>
+    <string name="pack_alarm_units">%1$d台で発生中</string>
+    <string name="state_mixed">充電・放電が混在</string>
+    <string name="unit_line">SOC %1$s%% ／ %2$s V ／ %3$s A ／ %4$s</string>
+    <string name="unit_alarms">アラーム %1$d件</string>
+    <string name="action_add_unit">BMSを追加</string>
+    <string name="action_add_unit_count">BMSを追加（%1$d／%2$d台）</string>
+    <string name="action_remove_unit">この台を外す</string>
+    <string name="action_disconnect_all">すべて切断</string>
+    <string name="confirm_disconnect_all">接続中のBMSをすべて切断して、最初の画面に戻りますか？</string>
+    <string name="msg_too_many_units">つなげるのは%1$s台までです</string>
+
     <!-- 接続 -->
     <string name="status_connecting">接続中…</string>
     <string name="status_connected">接続済み</string>
