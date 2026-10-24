@@ -9,7 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import jp.bmsjapan.app.ui.BmsTheme
 import jp.bmsjapan.app.ui.BmsViewModel
-import jp.bmsjapan.app.ui.LiveScreen
+import jp.bmsjapan.app.ui.DeviceScreen
 import jp.bmsjapan.app.ui.ScanScreen
 
 class MainActivity : ComponentActivity() {
@@ -21,7 +21,7 @@ class MainActivity : ComponentActivity() {
                 val vm: BmsViewModel = viewModel()
                 val connection by vm.connection.collectAsState()
                 // 接続中ならライブデータ、そうでなければスキャン画面
-                if (connection == null) ScanScreen(vm) else LiveScreen(vm)
+                if (connection == null) ScanScreen(vm) else DeviceScreen(vm)
             }
         }
     }

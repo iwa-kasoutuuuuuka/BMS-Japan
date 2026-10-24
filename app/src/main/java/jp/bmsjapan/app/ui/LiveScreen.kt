@@ -20,7 +20,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import kotlin.math.abs
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,15 +66,41 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LiveScreen(vm: BmsViewModel) {
+fun DeviceScreen(vm: BmsViewModel) {
     val state by vm.connectionState.collectAsState()
     val live by vm.live.collectAsState()
     val lastUpdate by vm.lastUpdate.collectAsState()
     val name by vm.selectedName.collectAsState()
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    val snackbar = remember { SnackbarHostState() }
+    val context = LocalContext.current
 
-    BackHandler { vm.disconnect() }
+    LaunchedEffect(Unit) {
+        vm.messages.collect { m -> snackbar.showSnackbar(context.getString(m.res, m.arg)) }
+    }
+
+    BackHandler { if (tab != 0) tab = 0 else vm.disconnect() }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        bottomBar = {
+            if (state == ConnectionState.CONNECTED && live != null) {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = tab == 0,
+                        onClick = { tab = 0 },
+                        icon = { Icon(Icons.Filled.Info, contentDescription = null) },
+                        label = { Text(stringResource(R.string.tab_live)) },
+                    )
+                    NavigationBarItem(
+                        selected = tab == 1,
+                        onClick = { tab = 1 },
+                        icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                        label = { Text(stringResource(R.string.tab_settings)) },
+                    )
+                }
+            }
+        },
         topBar = {
             TopAppBar(
                 title = {
@@ -77,7 +116,7 @@ fun LiveScreen(vm: BmsViewModel) {
                 },
                 actions = {
                     if (state == ConnectionState.CONNECTED) {
-                        IconButton(onClick = vm::refreshNow) {
+                        IconButton(onClick = { if (tab == 0) vm.refreshNow() else vm.loadSettings() }) {
                             Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.action_refresh))
                         }
                     }
@@ -102,6 +141,7 @@ fun LiveScreen(vm: BmsViewModel) {
                     Spacer(Modifier.height(16.dp))
                     Text(stringResource(if (state == ConnectionState.CONNECTED) R.string.waiting_data else R.string.connecting))
                 }
+                tab == 1 -> SettingsTab(vm, data)
                 else -> LiveContent(data, lastUpdate)
             }
         }
@@ -119,7 +159,7 @@ private fun statusText(state: ConnectionState?): String = stringResource(
 )
 
 @Composable
-private fun Centered(content: @Composable () -> Unit) {
+internal fun Centered(content: @Composable () -> Unit) {
     Column(
         Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
@@ -143,7 +183,8 @@ private fun LiveContent(d: LiveData, lastUpdate: Long?) {
             MetricGrid(
                 listOf(
                     stringResource(R.string.label_total_voltage) to "%.1f V".format(d.totalVoltage),
-                    stringResource(R.string.label_current) to "%+.1f A".format(d.current),
+                    // 符号の向きは機種で違う可能性があるため、向きは状態（充電中/放電中）で示し、ここは大きさだけ出す
+                    stringResource(R.string.label_current) to "%.1f A".format(abs(d.current)),
                     stringResource(R.string.label_power) to "%.3f kW".format(d.powerKw),
                     stringResource(R.string.label_remaining) to "%.1f Ah".format(d.remainingCapacity),
                     stringResource(R.string.label_cycles) to stringResource(R.string.cycles_format, d.cycleCount),
@@ -249,7 +290,7 @@ private fun SocCard(d: LiveData) {
 }
 
 @Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
+internal fun Section(title: String, content: @Composable () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)

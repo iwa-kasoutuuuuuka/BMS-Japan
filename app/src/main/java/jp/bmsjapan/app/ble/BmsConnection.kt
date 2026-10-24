@@ -15,17 +15,23 @@ import jp.bmsjapan.app.protocol.BmsCommands
 import jp.bmsjapan.app.protocol.BmsFrame
 import jp.bmsjapan.app.protocol.FrameAssembler
 import jp.bmsjapan.app.protocol.LiveData
+import jp.bmsjapan.app.protocol.Modbus
 import jp.bmsjapan.app.protocol.toHex
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -35,11 +41,16 @@ import java.time.LocalDateTime
 
 enum class ConnectionState { CONNECTING, CONNECTED, DISCONNECTED, FAILED }
 
+/** BMS から期待した応答が返ってこなかった */
+class BmsTimeoutException(message: String) : Exception(message)
+
 /**
  * 1 台の BMS との BLE 接続。
  * 接続 → MTU 512 → サービス探索 → Notify 有効化 → 認証（あれば）→ 時刻同期 → 5 秒ごとに運転データを読む。
  *
- * Android の GATT は同時に 1 操作しか受け付けないため、操作は [gattMutex] で 1 つずつ実行する。
+ * 2 段階の順番待ちがある:
+ * - [gattMutex]: Android の GATT は同時に 1 操作しか受け付けない
+ * - [transactionMutex]: 応答にアドレスが入っていないため、「送信 → 応答を待つ」を 1 組ずつ行う
  */
 @SuppressLint("MissingPermission") // BLUETOOTH_CONNECT は接続前に画面側で確認している
 class BmsConnection(
@@ -49,13 +60,12 @@ class BmsConnection(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val gattMutex = Mutex()
+    private val transactionMutex = Mutex()
     private var pending: CompletableDeferred<Int>? = null
     private var gatt: BluetoothGatt? = null
     private var pollJob: Job? = null
     private val assembler = FrameAssembler()
-
-    /** 最後に送った読み出しの開始アドレス。応答にはアドレスが無いので、これで区別する */
-    @Volatile private var lastReadStart = -1
+    private val frames = MutableSharedFlow<BmsFrame>(extraBufferCapacity = 32)
 
     private val _state = MutableStateFlow(ConnectionState.CONNECTING)
     val state: StateFlow<ConnectionState> = _state.asStateFlow()
@@ -155,13 +165,17 @@ class BmsConnection(
             // B40 モジュールは "HiLink" での認証がある。無い機種もあるので失敗しても続ける
             g.getService(BmsUuids.MODULE_SERVICE)?.getCharacteristic(BmsUuids.MODULE_AUTH)?.let { auth ->
                 runCatching {
-                    write(g, auth, "HiLink".toByteArray(), withResponse = true)
+                    write(g, auth, "HiLink".toByteArray())
                     gattOp { g.readCharacteristic(auth) }
                 }.onFailure { Log.w(TAG, "module auth skipped", it) }
             }
 
             val now = LocalDateTime.now()
-            send(BmsCommands.syncTime(now.year, now.monthValue, now.dayOfMonth, now.hour, now.minute, now.second))
+            runCatching {
+                transaction(BmsCommands.syncTime(now.year, now.monthValue, now.dayOfMonth, now.hour, now.minute, now.second)) {
+                    it is BmsFrame.WriteMultiAck && it.start == 212
+                }
+            }.onFailure { Log.w(TAG, "time sync not acknowledged", it) }
 
             _state.value = ConnectionState.CONNECTED
             startPolling()
@@ -192,36 +206,81 @@ class BmsConnection(
         pollJob?.cancel()
         pollJob = scope.launch {
             while (isActive) {
-                runCatching { requestLive() }.onFailure { Log.w(TAG, "poll failed", it) }
+                runCatching { refreshLive() }.onFailure { Log.w(TAG, "poll failed", it) }
                 delay(pollIntervalMs)
             }
         }
     }
 
+    // ---- 公開 API（すべて応答を待ってから戻る） ----
+
     /** 運転データを読む。33 セル以上なら追加分も読む */
-    suspend fun requestLive() {
-        lastReadStart = 0
-        send(BmsCommands.READ_LIVE)
-        val cells = _live.value?.cellCount ?: 0
-        if (cells > 32) {
-            delay(300) // 前の応答が届くのを待つ（応答にアドレスが無いため重ならないようにする）
-            lastReadStart = 71
-            send(BmsCommands.READ_EXTRA_CELLS)
+    suspend fun refreshLive() {
+        var data = LiveData.parse(readRegisters(0, LiveData.REGISTER_COUNT))
+        if (data.cellCount > 32) {
+            runCatching { data = data.withExtraCells(readRegisters(71, 16)) }
+        }
+        _live.value = data
+        _lastUpdate.value = System.currentTimeMillis()
+    }
+
+    /** 保持レジスタを読む */
+    suspend fun readRegisters(start: Int, count: Int): IntArray {
+        val frame = transaction(Modbus.readRegisters(start, count)) {
+            it is BmsFrame.ReadResponse && it.registers.size == count
+        }
+        return (frame as BmsFrame.ReadResponse).registers
+    }
+
+    /** 1 レジスタ書き込み。BMS が同じ値をエコーで返したら成功 */
+    suspend fun writeRegister(register: Int, value: Int) {
+        transaction(Modbus.writeRegister(register, value)) {
+            it is BmsFrame.WriteSingleAck && it.register == register && it.value == value
+        }
+    }
+
+    /** 複数レジスタ書き込み */
+    suspend fun writeRegisters(start: Int, values: IntArray) {
+        transaction(Modbus.writeRegisters(start, values)) {
+            it is BmsFrame.WriteMultiAck && it.start == start && it.count == values.size
         }
     }
 
     // ---- 送受信 ----
 
-    /** BMS へフレームを送る（fff2 に書き込み） */
-    suspend fun send(frame: ByteArray) {
+    /**
+     * フレームを送り、[matches] に合う応答を待つ。応答が無ければ 2 回まで送り直す。
+     * 送信より先に受信の待ち受けを始めるので、応答を取りこぼさない。
+     */
+    private suspend fun transaction(frame: ByteArray, matches: (BmsFrame) -> Boolean): BmsFrame =
+        transactionMutex.withLock {
+            var lastError: Exception? = null
+            repeat(3) { attempt ->
+                try {
+                    return@withLock coroutineScope {
+                        val reply = async(start = CoroutineStart.UNDISPATCHED) {
+                            withTimeout(REPLY_TIMEOUT_MS) { frames.first(matches) }
+                        }
+                        sendRaw(frame)
+                        reply.await()
+                    }
+                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                    Log.w(TAG, "no reply for ${frame.toHex()} (attempt ${attempt + 1})")
+                    lastError = BmsTimeoutException("no reply for ${frame.toHex()}")
+                }
+            }
+            throw lastError ?: BmsTimeoutException("no reply")
+        }
+
+    private suspend fun sendRaw(frame: ByteArray) {
         val g = gatt ?: error("not connected")
         val c = g.getService(BmsUuids.SERVICE)?.getCharacteristic(BmsUuids.WRITE) ?: error("write characteristic not found")
         Log.d(TAG, "TX ${frame.toHex()}")
-        write(g, c, frame, withResponse = true)
+        write(g, c, frame)
     }
 
-    private suspend fun write(g: BluetoothGatt, c: BluetoothGattCharacteristic, data: ByteArray, withResponse: Boolean) {
-        val type = if (withResponse) BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT else BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+    private suspend fun write(g: BluetoothGatt, c: BluetoothGattCharacteristic, data: ByteArray) {
+        val type = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         val status = gattOp {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 g.writeCharacteristic(c, data, type) == BluetoothGatt.GATT_SUCCESS
@@ -240,22 +299,7 @@ class BmsConnection(
     private fun onNotify(c: BluetoothGattCharacteristic, value: ByteArray) {
         if (c.uuid != BmsUuids.NOTIFY) return
         Log.d(TAG, "RX ${value.toHex()}")
-        for (frame in assembler.feed(value)) handle(frame)
-    }
-
-    private fun handle(frame: BmsFrame) {
-        if (frame !is BmsFrame.ReadResponse) return
-        val regs = frame.registers
-        when {
-            // 元アプリと同じく、バイト数（レジスタ数）で応答の種類を判断する
-            regs.size == LiveData.REGISTER_COUNT -> {
-                _live.value = LiveData.parse(regs)
-                _lastUpdate.value = System.currentTimeMillis()
-            }
-            regs.size == 16 && lastReadStart == 71 -> {
-                _live.value = _live.value?.withExtraCells(regs)
-            }
-        }
+        for (frame in assembler.feed(value)) frames.tryEmit(frame)
     }
 
     /**
@@ -279,5 +323,6 @@ class BmsConnection(
     private companion object {
         const val TAG = "BmsConnection"
         const val OP_TIMEOUT_MS = 10_000L
+        const val REPLY_TIMEOUT_MS = 3_000L
     }
 }

@@ -65,6 +65,94 @@
     <string name="section_alarms">アラーム</string>
     <string name="no_alarms">異常はありません</string>
 
+    <!-- タブ -->
+    <string name="tab_live">ライブ</string>
+    <string name="tab_settings">設定</string>
+
+    <!-- 設定: パスワード -->
+    <string name="checking_password">パスワードを確認しています…</string>
+    <string name="password_read_failed">BMSからパスワードを読み出せませんでした。</string>
+    <string name="password_prompt">BMSのパスワードを入力してください</string>
+    <string name="password_hint">設定を変更するには、BMSに登録されている6桁のパスワードが必要です。</string>
+    <string name="password_label">パスワード</string>
+    <string name="password_wrong">パスワードが違います</string>
+
+    <!-- 設定: 一覧 -->
+    <string name="loading_settings">設定値を読み込んでいます…</string>
+    <string name="settings_caution">値を変えると、BMSの保護動作が変わります。電池の仕様を確認してから変更してください。</string>
+    <string name="group_switches">スイッチ</string>
+    <string name="group_battery_type">電池の種類</string>
+    <string name="group_voltage">電圧の保護</string>
+    <string name="group_current">電流の保護</string>
+    <string name="group_temperature">温度の保護</string>
+    <string name="group_battery">電池の情報</string>
+    <string name="group_balance">均等化</string>
+    <string name="group_info">機器の構成（表示のみ）</string>
+    <string name="label_battery_type">電池の種類</string>
+    <string name="release_value">解除 %1$s</string>
+    <string name="current_value">現在の値: %1$s</string>
+    <string name="new_value">新しい値</string>
+    <string name="allowed_range">%1$s〜%2$s %3$s の範囲で入力</string>
+
+    <string name="set_cell_ov">セル過電圧の保護</string>
+    <string name="set_cell_uv">セル低電圧の保護</string>
+    <string name="set_pack_ov">総電圧が高いときの保護</string>
+    <string name="set_pack_uv">総電圧が低いときの保護</string>
+    <string name="set_cell_diff">セル電圧差の保護</string>
+    <string name="set_charge_oc">充電過電流の保護</string>
+    <string name="set_discharge_oc">放電過電流の保護</string>
+    <string name="set_charge_ot">充電時の高温保護</string>
+    <string name="set_charge_ut">充電時の低温保護</string>
+    <string name="set_discharge_ot">放電時の高温保護</string>
+    <string name="set_discharge_ut">放電時の低温保護</string>
+    <string name="set_temp_diff">温度差の保護</string>
+    <string name="set_mos_ot">MOSの過熱保護</string>
+    <string name="set_rated_capacity">定格容量</string>
+    <string name="set_cell_nominal">セルの基準電圧</string>
+    <string name="set_soc">SOC（残量）の設定</string>
+    <string name="set_sleep_wait">スリープまでの時間</string>
+    <string name="set_balance_start_v">均等化を始める電圧</string>
+    <string name="set_balance_start_diff">均等化を始める電圧差</string>
+    <string name="set_balance_current">均等化の電流</string>
+    <string name="set_board1_cells">計測ボード1のセル数</string>
+    <string name="set_board2_cells">計測ボード2のセル数</string>
+    <string name="set_board3_cells">計測ボード3のセル数</string>
+    <string name="set_temp_sensors">温度センサーの数</string>
+
+    <!-- 設定: 入力エラー -->
+    <string name="error_not_number">数値を入力してください</string>
+    <string name="error_range">%1$s〜%2$s の範囲で入力してください</string>
+    <string name="error_above_release">解除値（%1$s）より大きくしてください</string>
+    <string name="error_below_release">解除値（%1$s）より小さくしてください</string>
+
+    <!-- 設定: スイッチの確認 -->
+    <string name="confirm_charge_on">充電MOSをONにして、充電できるようにしますか？</string>
+    <string name="confirm_charge_off">充電MOSをOFFにして、充電を止めますか？</string>
+    <string name="confirm_discharge_on">放電MOSをONにして、電気を使えるようにしますか？</string>
+    <string name="confirm_discharge_off">放電MOSをOFFにして、出力を止めますか？\n接続している機器への電気が止まります。</string>
+    <string name="confirm_balance_on">均等化をONにしますか？</string>
+    <string name="confirm_balance_off">均等化をOFFにしますか？</string>
+
+    <!-- 設定: 電池の種類 -->
+    <string name="battery_lfp">リン酸鉄リチウム（LiFePO4）</string>
+    <string name="battery_ncm">三元系リチウム（NCM）</string>
+    <string name="battery_lto">チタン酸リチウム（LTO）</string>
+    <string name="battery_preset_detail">セル過電圧 %1$s V／低電圧 %2$s V</string>
+    <string name="battery_preset_warning">電池の種類を変えると、セルと総電圧（%1$dセル分）の保護値・解除値、均等化を始める電圧がまとめて書き換わります。</string>
+
+    <!-- 設定: 結果 -->
+    <string name="msg_write_ok">設定しました</string>
+    <string name="msg_write_failed">設定できませんでした（BMSから応答がありません）</string>
+    <string name="msg_read_failed">設定値を読み出せませんでした</string>
+
+    <!-- 共通の操作 -->
+    <string name="action_retry">もう一度</string>
+    <string name="action_confirm">確認</string>
+    <string name="action_write">書き込む</string>
+    <string name="action_cancel">キャンセル</string>
+    <string name="action_turn_on">ONにする</string>
+    <string name="action_turn_off">OFFにする</string>
+
     <!-- アラーム（レジスタ58） -->
     <string name="alarm_cell_ov1">セル過電圧（レベル1）</string>
     <string name="alarm_cell_ov2">セル過電圧（レベル2）</string>
