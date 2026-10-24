@@ -13,6 +13,8 @@ import jp.bmsjapan.app.ble.FoundDevice
 import jp.bmsjapan.app.protocol.BatteryType
 import jp.bmsjapan.app.protocol.BmsPassword
 import jp.bmsjapan.app.protocol.BmsSettings
+import jp.bmsjapan.app.protocol.HistoryProtocol
+import jp.bmsjapan.app.protocol.HistoryRecord
 import jp.bmsjapan.app.protocol.LiveData
 import jp.bmsjapan.app.protocol.Setting
 import jp.bmsjapan.app.protocol.SwitchSetting
@@ -164,6 +166,8 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
     private var devicePassword: String? = null
 
     private fun resetSettingsState() {
+        historyJob?.cancel()
+        _history.value = HistoryState()
         devicePassword = null
         _access.value = SettingsAccess.CheckingPassword
         _settings.value = null
@@ -253,11 +257,73 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- 故障履歴 ----
+    private val _history = MutableStateFlow(HistoryState())
+    val history: StateFlow<HistoryState> = _history.asStateFlow()
+    private var historyJob: Job? = null
+
+    /** 履歴タブを開いたときに呼ぶ。まだ何も読んでいなければ最初の分を読む */
+    fun openHistory() {
+        val h = _history.value
+        if (h.records.isEmpty() && !h.loading && !h.complete) loadMoreHistory()
+    }
+
+    fun reloadHistory() {
+        historyJob?.cancel()
+        _history.value = HistoryState()
+        loadMoreHistory()
+    }
+
+    /** 元アプリと同じく、1 回に 4 ページ（28 件）ずつ読む */
+    fun loadMoreHistory(pages: Int = 4) {
+        val c = _connection.value ?: return
+        if (_history.value.loading || _history.value.complete) return
+        historyJob = viewModelScope.launch {
+            _history.value = _history.value.copy(loading = true, error = false)
+            try {
+                repeat(pages) {
+                    val h = _history.value
+                    if (h.complete) return@repeat
+                    val page = HistoryProtocol.parsePage(
+                        c.readRegisters(HistoryProtocol.pageAddress(h.nextPage), HistoryProtocol.PAGE_REGISTERS),
+                    )
+                    val seen = h.records.map { it.number }.toSet()
+                    val fresh = page.records.filter { it.number !in seen }
+                    val records = h.records + fresh
+                    val total = h.total ?: page.records.firstOrNull()?.totalCount
+                    val complete = page.reachedEnd ||
+                        fresh.size < page.records.size ||          // 同じ番号が戻ってきた＝一周した
+                        page.records.isEmpty() ||
+                        (total != null && records.size >= total) ||
+                        h.nextPage + 1 >= MAX_HISTORY_PAGES
+                    _history.value = h.copy(records = records, total = total, nextPage = h.nextPage + 1, complete = complete)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "history read failed", e)
+                _history.value = _history.value.copy(error = true)
+            } finally {
+                _history.value = _history.value.copy(loading = false)
+            }
+        }
+    }
+
     override fun onCleared() {
         _connection.value?.close()
     }
 
     private companion object {
         const val TAG = "BmsViewModel"
+
+        /** 念のための上限（127 レジスタ × 7 件 × 100 ページ = 700 件） */
+        const val MAX_HISTORY_PAGES = 100
     }
 }
+
+data class HistoryState(
+    val records: List<HistoryRecord> = emptyList(),
+    val total: Int? = null,
+    val nextPage: Int = 0,
+    val complete: Boolean = false,
+    val loading: Boolean = false,
+    val error: Boolean = false,
+)

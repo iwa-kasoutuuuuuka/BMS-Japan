@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -95,6 +96,12 @@ fun DeviceScreen(vm: BmsViewModel) {
                     NavigationBarItem(
                         selected = tab == 1,
                         onClick = { tab = 1 },
+                        icon = { Icon(Icons.Filled.DateRange, contentDescription = null) },
+                        label = { Text(stringResource(R.string.tab_history)) },
+                    )
+                    NavigationBarItem(
+                        selected = tab == 2,
+                        onClick = { tab = 2 },
                         icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
                         label = { Text(stringResource(R.string.tab_settings)) },
                     )
@@ -116,7 +123,13 @@ fun DeviceScreen(vm: BmsViewModel) {
                 },
                 actions = {
                     if (state == ConnectionState.CONNECTED) {
-                        IconButton(onClick = { if (tab == 0) vm.refreshNow() else vm.loadSettings() }) {
+                        IconButton(onClick = {
+                            when (tab) {
+                                0 -> vm.refreshNow()
+                                1 -> vm.reloadHistory()
+                                else -> vm.loadSettings()
+                            }
+                        }) {
                             Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.action_refresh))
                         }
                     }
@@ -141,7 +154,8 @@ fun DeviceScreen(vm: BmsViewModel) {
                     Spacer(Modifier.height(16.dp))
                     Text(stringResource(if (state == ConnectionState.CONNECTED) R.string.waiting_data else R.string.connecting))
                 }
-                tab == 1 -> SettingsTab(vm, data)
+                tab == 1 -> HistoryTab(vm)
+                tab == 2 -> SettingsTab(vm, data)
                 else -> LiveContent(data, lastUpdate)
             }
         }
