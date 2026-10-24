@@ -109,6 +109,27 @@ class SettingsTest {
         assertTrue(BatteryType.LFP.availableFor(48))
     }
 
+    @Test fun passwordEncodeMatchesOriginalFrame() {
+        val regs = BmsPassword.encode("654321")
+        assertEquals("654321", BmsPassword.decode(regs))
+        // 元アプリ: "D21000C90003" + ASCII の16進 + CRC
+        val frame = Modbus.writeRegisters(BmsPassword.START, regs).toHex()
+        assertTrue(frame.startsWith("D21000C90003363534333231"))
+        assertEquals(6 + 6 + 2, frame.length / 2)
+    }
+
+    @Test fun passwordChangeChecks() {
+        val cur = "123456"
+        assertEquals(PasswordChangeCheck.OK, BmsPassword.validateChange(cur, "123456", "987654", "987654"))
+        assertEquals(PasswordChangeCheck.EMPTY, BmsPassword.validateChange(cur, "", "987654", "987654"))
+        assertEquals(PasswordChangeCheck.WRONG_OLD, BmsPassword.validateChange(cur, "111111", "987654", "987654"))
+        assertEquals(PasswordChangeCheck.WRONG_OLD, BmsPassword.validateChange(null, "123456", "987654", "987654"))
+        assertEquals(PasswordChangeCheck.BAD_FORMAT, BmsPassword.validateChange(cur, "123456", "9876", "9876"))
+        assertEquals(PasswordChangeCheck.BAD_FORMAT, BmsPassword.validateChange(cur, "123456", "98765a", "98765a"))
+        assertEquals(PasswordChangeCheck.MISMATCH, BmsPassword.validateChange(cur, "123456", "987654", "987655"))
+        assertEquals(PasswordChangeCheck.SAME_AS_OLD, BmsPassword.validateChange(cur, "123456", "123456", "123456"))
+    }
+
     @Test fun passwordDecode() {
         // "123456" = 0x3132 0x3334 0x3536
         assertEquals("123456", BmsPassword.decode(intArrayOf(0x3132, 0x3334, 0x3536)))

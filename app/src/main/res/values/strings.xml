@@ -145,6 +145,24 @@
     <string name="msg_write_failed">設定できませんでした（BMSから応答がありません）</string>
     <string name="msg_read_failed">設定値を読み出せませんでした</string>
 
+    <!-- 設定: パスワードの変更 -->
+    <string name="group_security">セキュリティ</string>
+    <string name="label_change_password">パスワードの変更</string>
+    <string name="change_password_caption">設定画面を開くときの6桁のパスワード</string>
+    <string name="pwd_old">今のパスワード</string>
+    <string name="pwd_new">新しいパスワード（数字6桁）</string>
+    <string name="pwd_repeat">新しいパスワード（もう一度）</string>
+    <string name="pwd_err_empty">すべての欄を入力してください</string>
+    <string name="pwd_err_wrong_old">今のパスワードが違います</string>
+    <string name="pwd_err_format">新しいパスワードは数字6桁にしてください</string>
+    <string name="pwd_err_mismatch">新しいパスワードが一致しません</string>
+    <string name="pwd_err_same">今と同じパスワードです</string>
+    <string name="pwd_warning">新しいパスワードは忘れないよう控えておいてください。パスワードはBMS本体に保存され、元の公式アプリでも同じパスワードが必要になります。</string>
+    <string name="msg_pwd_changed">パスワードを変更しました</string>
+    <string name="msg_pwd_change_failed">パスワードを変更できませんでした（BMSから応答がありません）</string>
+    <string name="msg_pwd_verify_failed">BMSに保存されたパスワードが入力と違います。もう一度お試しください</string>
+    <string name="action_change">変更する</string>
+
     <!-- 共通の操作 -->
     <string name="action_retry">もう一度</string>
     <string name="action_confirm">確認</string>

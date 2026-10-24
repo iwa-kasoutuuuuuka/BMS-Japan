@@ -191,4 +191,27 @@ object BmsPassword {
             append((r and 0xFF).toChar())
         }
     }.trimEnd('\u0000', ' ')
+
+    /** 6 桁の数字を 3 レジスタ（ASCII 2 文字ずつ）にする */
+    fun encode(pwd: String): IntArray {
+        require(isValidFormat(pwd)) { "password must be 6 digits" }
+        return IntArray(COUNT) { i -> (pwd[i * 2].code shl 8) or pwd[i * 2 + 1].code }
+    }
+
+    /**
+     * 元アプリの入力欄は「数字のみ・最大 6 桁」。
+     * 6 桁未満だと 3 レジスタ分のデータが足りないフレームになってしまうため、このアプリでは 6 桁ちょうどにする。
+     */
+    fun isValidFormat(pwd: String): Boolean = pwd.length == COUNT * 2 && pwd.all { it in '0'..'9' }
+
+    fun validateChange(current: String?, old: String, new: String, repeat: String): PasswordChangeCheck = when {
+        old.isEmpty() || new.isEmpty() || repeat.isEmpty() -> PasswordChangeCheck.EMPTY
+        current == null || old != current -> PasswordChangeCheck.WRONG_OLD
+        !isValidFormat(new) -> PasswordChangeCheck.BAD_FORMAT
+        new != repeat -> PasswordChangeCheck.MISMATCH
+        new == old -> PasswordChangeCheck.SAME_AS_OLD
+        else -> PasswordChangeCheck.OK
+    }
 }
+
+enum class PasswordChangeCheck { OK, EMPTY, WRONG_OLD, BAD_FORMAT, MISMATCH, SAME_AS_OLD }

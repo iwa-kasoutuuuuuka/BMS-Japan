@@ -16,6 +16,7 @@ import jp.bmsjapan.app.protocol.BmsSettings
 import jp.bmsjapan.app.protocol.HistoryProtocol
 import jp.bmsjapan.app.protocol.HistoryRecord
 import jp.bmsjapan.app.protocol.LiveData
+import jp.bmsjapan.app.protocol.PasswordChangeCheck
 import jp.bmsjapan.app.protocol.Setting
 import jp.bmsjapan.app.protocol.SwitchSetting
 import jp.bmsjapan.app.protocol.buildBatteryPreset
@@ -236,6 +237,38 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         val cells = live.value?.cellCount ?: return
         val values = buildBatteryPreset(type, cells, s) ?: return
         runWrite { c -> c.writeRegisters(137, values) }
+    }
+
+    /**
+     * パスワードを変更する。入力の確認結果をすぐ返し、OK のときだけ書き込む。
+     * 書き込み後に読み直して、BMS に保存されたことを確かめる。
+     */
+    fun changePassword(old: String, new: String, repeat: String): PasswordChangeCheck {
+        val check = BmsPassword.validateChange(devicePassword, old, new, repeat)
+        if (check != PasswordChangeCheck.OK) return check
+        val c = _connection.value ?: return check
+        if (_access.value !is SettingsAccess.Unlocked || _busy.value) return check
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                c.writeRegisters(BmsPassword.START, BmsPassword.encode(new))
+                val stored = BmsPassword.decode(c.readRegisters(BmsPassword.START, BmsPassword.COUNT))
+                if (stored == new) {
+                    devicePassword = new
+                    _messages.tryEmit(UiMessage(R.string.msg_pwd_changed))
+                } else {
+                    // 応答はあったが読み直すと違う。BMS に入っている方を正とする
+                    devicePassword = stored
+                    _messages.tryEmit(UiMessage(R.string.msg_pwd_verify_failed))
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "password change failed", e)
+                _messages.tryEmit(UiMessage(R.string.msg_pwd_change_failed))
+            } finally {
+                _busy.value = false
+            }
+        }
+        return check
     }
 
     /** 書き込み → 応答を確認 → 設定を読み直す */

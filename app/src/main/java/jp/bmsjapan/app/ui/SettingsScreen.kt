@@ -48,6 +48,7 @@ import jp.bmsjapan.app.R
 import jp.bmsjapan.app.protocol.BatteryType
 import jp.bmsjapan.app.protocol.BmsSettings
 import jp.bmsjapan.app.protocol.LiveData
+import jp.bmsjapan.app.protocol.PasswordChangeCheck
 import jp.bmsjapan.app.protocol.Setting
 import jp.bmsjapan.app.protocol.SettingGroup
 import jp.bmsjapan.app.protocol.SwitchSetting
@@ -115,6 +116,7 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
     var editing by remember { mutableStateOf<Setting?>(null) }
     var confirmSwitch by remember { mutableStateOf<Pair<SwitchSetting, Boolean>?>(null) }
     var choosingBattery by remember { mutableStateOf(false) }
+    var changingPassword by remember { mutableStateOf(false) }
 
     val s = settings
     Column(Modifier.fillMaxSize()) {
@@ -168,6 +170,16 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
                 )
             }
 
+            Section(stringResource(R.string.group_security)) {
+                SettingRow(
+                    label = stringResource(R.string.label_change_password),
+                    value = "",
+                    caption = stringResource(R.string.change_password_caption),
+                    enabled = !busy,
+                    onClick = { changingPassword = true },
+                )
+            }
+
             SettingGroup.entries.forEach { group ->
                 val items = Setting.entries.filter { it.group == group }
                 Section(stringResource(group.title)) {
@@ -212,6 +224,17 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
                 }) { Text(stringResource(if (on) R.string.action_turn_on else R.string.action_turn_off)) }
             },
             dismissButton = { TextButton(onClick = { confirmSwitch = null }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
+
+    if (changingPassword) {
+        ChangePasswordDialog(
+            onDismiss = { changingPassword = false },
+            onSubmit = { old, new, repeat ->
+                val r = vm.changePassword(old, new, repeat)
+                if (r == PasswordChangeCheck.OK) changingPassword = false
+                r
+            },
         )
     }
 
@@ -304,6 +327,55 @@ private fun EditSettingDialog(setting: Setting, settings: BmsSettings, onDismiss
                     is ValidationResult.MustBeBelow -> error = belowFmt.format(r.release)
                 }
             }) { Text(stringResource(R.string.action_write)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
+@Composable
+private fun ChangePasswordDialog(onDismiss: () -> Unit, onSubmit: (String, String, String) -> PasswordChangeCheck) {
+    var old by remember { mutableStateOf("") }
+    var new by remember { mutableStateOf("") }
+    var repeat by remember { mutableStateOf("") }
+    var result by remember { mutableStateOf<PasswordChangeCheck?>(null) }
+    val digits6 = { v: String -> v.filter { it in '0'..'9' }.take(6) }
+
+    @Composable
+    fun field(value: String, onChange: (String) -> Unit, label: Int, error: Boolean) = OutlinedTextField(
+        value = value,
+        onValueChange = { onChange(digits6(it)); result = null },
+        label = { Text(stringResource(label)) },
+        singleLine = true,
+        isError = error,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+        modifier = Modifier.fillMaxWidth(),
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.label_change_password)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                field(old, { old = it }, R.string.pwd_old, result == PasswordChangeCheck.WRONG_OLD)
+                field(new, { new = it }, R.string.pwd_new, result == PasswordChangeCheck.BAD_FORMAT || result == PasswordChangeCheck.SAME_AS_OLD)
+                field(repeat, { repeat = it }, R.string.pwd_repeat, result == PasswordChangeCheck.MISMATCH)
+                val error = when (result) {
+                    PasswordChangeCheck.EMPTY -> R.string.pwd_err_empty
+                    PasswordChangeCheck.WRONG_OLD -> R.string.pwd_err_wrong_old
+                    PasswordChangeCheck.BAD_FORMAT -> R.string.pwd_err_format
+                    PasswordChangeCheck.MISMATCH -> R.string.pwd_err_mismatch
+                    PasswordChangeCheck.SAME_AS_OLD -> R.string.pwd_err_same
+                    PasswordChangeCheck.OK, null -> null
+                }
+                if (error != null) {
+                    Text(stringResource(error), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Text(stringResource(R.string.pwd_warning), style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { result = onSubmit(old, new, repeat) }) { Text(stringResource(R.string.action_change)) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     )
