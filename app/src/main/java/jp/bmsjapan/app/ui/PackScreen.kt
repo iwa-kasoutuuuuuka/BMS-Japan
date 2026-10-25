@@ -61,6 +61,7 @@ fun PackScreen(vm: BmsViewModel) {
     val mode by vm.mode.collectAsState()
     val statuses by vm.unitStatuses.collectAsState()
     val pack by vm.pack.collectAsState()
+    val reconnecting by vm.reconnecting.collectAsState()
     var confirmDisconnect by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
@@ -102,8 +103,10 @@ fun PackScreen(vm: BmsViewModel) {
             items(statuses, key = { it.address }) { s ->
                 UnitCard(
                     status = s,
+                    reconnectAttempt = reconnecting[s.address],
                     onOpen = { vm.select(s.address) },
                     onReconnect = { vm.reconnectUnit(s.address) },
+                    onStopReconnect = { vm.stopReconnecting(s.address) },
                     onRemove = { vm.removeUnit(s.address) },
                 )
             }
@@ -217,7 +220,14 @@ private fun Grid(items: List<Pair<String, String>>) {
 }
 
 @Composable
-private fun UnitCard(status: UnitStatus, onOpen: () -> Unit, onReconnect: () -> Unit, onRemove: () -> Unit) {
+private fun UnitCard(
+    status: UnitStatus,
+    reconnectAttempt: Int?,
+    onOpen: () -> Unit,
+    onReconnect: () -> Unit,
+    onStopReconnect: () -> Unit,
+    onRemove: () -> Unit,
+) {
     val live = status.live
     val alarm = live?.alarms?.isNotEmpty() == true
     Card(
@@ -232,6 +242,13 @@ private fun UnitCard(status: UnitStatus, onOpen: () -> Unit, onReconnect: () -> 
             Column(Modifier.weight(1f)) {
                 Text(status.name, fontWeight = FontWeight.Bold, maxLines = 1)
                 when {
+                    reconnectAttempt != null && (status.state != ConnectionState.CONNECTED || live == null) -> {
+                        Text(
+                            stringResource(R.string.reconnecting_short, reconnectAttempt, BmsViewModel.MAX_RECONNECT_ATTEMPTS),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        TextButton(onClick = onStopReconnect) { Text(stringResource(R.string.action_stop_reconnect)) }
+                    }
                     status.state == ConnectionState.FAILED || status.state == ConnectionState.DISCONNECTED -> {
                         Text(
                             stringResource(if (status.state == ConnectionState.FAILED) R.string.status_failed else R.string.status_disconnected),

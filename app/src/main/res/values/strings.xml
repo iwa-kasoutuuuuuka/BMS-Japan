@@ -52,6 +52,11 @@
     <string name="action_connect_saved">接続する</string>
     <string name="action_forget_saved">忘れる</string>
     <string name="auto_connect_label">起動時に自動でつなぐ</string>
+    <string name="auto_reconnect_label">切れたら自動でつなぎ直す</string>
+    <string name="reconnecting_title">接続が切れたため、つなぎ直しています…</string>
+    <string name="reconnecting_detail">%1$d／%2$d回目（BMSの電源と距離を確認してください）</string>
+    <string name="reconnecting_short">つなぎ直し中（%1$d／%2$d回目）</string>
+    <string name="action_stop_reconnect">つなぎ直しをやめる</string>
 
     <!-- 接続 -->
     <string name="status_connecting">接続中…</string>

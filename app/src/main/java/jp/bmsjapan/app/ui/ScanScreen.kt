@@ -103,6 +103,7 @@ fun ScanScreen(vm: BmsViewModel) {
 
     val saved by vm.saved.collectAsState()
     val autoConnect by vm.autoConnect.collectAsState()
+    val autoReconnect by vm.autoReconnect.collectAsState()
 
     val mode by vm.mode.collectAsState()
     val adding by vm.adding.collectAsState()
@@ -154,9 +155,11 @@ fun ScanScreen(vm: BmsViewModel) {
                             modeLabel = stringResource(s.mode.label),
                             names = s.devices.map { it.name },
                             autoConnect = autoConnect,
+                            autoReconnect = autoReconnect,
                             onConnect = vm::connectSaved,
                             onForget = vm::forgetSaved,
                             onAutoConnectChange = vm::setAutoConnect,
+                            onAutoReconnectChange = vm::setAutoReconnect,
                         )
                     }
                     if (!adding) {
@@ -254,9 +257,11 @@ private fun SavedDevicesCard(
     modeLabel: String,
     names: List<String>,
     autoConnect: Boolean,
+    autoReconnect: Boolean,
     onConnect: () -> Unit,
     onForget: () -> Unit,
     onAutoConnectChange: (Boolean) -> Unit,
+    onAutoReconnectChange: (Boolean) -> Unit,
 ) {
     Card(
         Modifier
@@ -278,6 +283,10 @@ private fun SavedDevicesCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.auto_connect_label), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                 Switch(checked = autoConnect, onCheckedChange = onAutoConnectChange)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.auto_reconnect_label), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Switch(checked = autoReconnect, onCheckedChange = onAutoReconnectChange)
             }
         }
     }

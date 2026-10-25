@@ -181,27 +181,68 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         _mode.value = setup.mode
         prefs.edit().putInt(PREF_MODE, setup.mode.code).apply()
         _units.value = setup.devices.map { newUnit(it.address, it.name) }
-        setup.devices.forEach { watchForRetry(it.address) }
+        setup.devices.forEach { supervise(it.address) }
         if (setup.mode == PackMode.SINGLE) setup.devices.firstOrNull()?.let { select(it.address) }
     }
 
+    // ---- 自動再接続 ----
+
+    /** 切れたら自動でつなぎ直すか（設定として保存） */
+    private val _autoReconnect = MutableStateFlow(prefs.getBoolean(PREF_AUTO_RECONNECT, true))
+    val autoReconnect: StateFlow<Boolean> = _autoReconnect.asStateFlow()
+
+    fun setAutoReconnect(on: Boolean) {
+        _autoReconnect.value = on
+        prefs.edit().putBoolean(PREF_AUTO_RECONNECT, on).apply()
+    }
+
+    /** つなぎ直している機器と、その回数（アドレス → 何回目か） */
+    private val _reconnecting = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val reconnecting: StateFlow<Map<String, Int>> = _reconnecting.asStateFlow()
+
+    private fun setAttempt(address: String, attempt: Int?) {
+        _reconnecting.value = if (attempt == null) _reconnecting.value - address else _reconnecting.value + (address to attempt)
+    }
+
+    private fun connectionOf(address: String): BmsConnection? = _units.value.firstOrNull { it.address == address }?.connection
+
     /**
-     * 電源が入っていない・離れているなどで接続に失敗したら、少し待ってつなぎ直す（最大 [AUTO_RETRY_COUNT] 回）。
-     * 一度つながったら見張りをやめる。
+     * 1 台の接続を見張る。一覧にいる間ずっと動く。
+     * - 最初の接続に失敗したとき、または使用中に切れたとき、少しずつ間隔を空けてつなぎ直す（最大 [MAX_RECONNECT_ATTEMPTS] 回）
+     * - つながったら回数を 0 に戻す
+     * - 「この台を外す」「すべて切断」ではこの見張りを先に止めるので、つなぎ直さない
      */
-    private fun watchForRetry(address: String) {
+    private fun supervise(address: String) {
         retryJobs.remove(address)?.cancel()
         retryJobs[address] = viewModelScope.launch {
-            repeat(AUTO_RETRY_COUNT) {
-                val conn = _units.value.firstOrNull { it.address == address }?.connection ?: return@launch
-                val result = conn.state.first { it == ConnectionState.CONNECTED || it == ConnectionState.FAILED }
-                if (result == ConnectionState.CONNECTED) return@launch
-                delay(AUTO_RETRY_DELAY_MS)
-                if (_units.value.none { it.address == address }) return@launch
-                Log.i(TAG, "retry connecting $address (${it + 1}/$AUTO_RETRY_COUNT)")
-                reconnectUnit(address)
+            var attempt = 0
+            while (true) {
+                val conn = connectionOf(address) ?: break
+                val state = conn.state.first { it != ConnectionState.CONNECTING }
+                if (connectionOf(address) !== conn) continue   // 手動の再接続などで差し替わった
+                if (state == ConnectionState.CONNECTED) {
+                    attempt = 0
+                    setAttempt(address, null)
+                    conn.state.first { it != ConnectionState.CONNECTED }   // 切れるまで待つ
+                    if (connectionOf(address) !== conn) continue
+                    Log.i(TAG, "connection lost: $address")
+                }
+                if (!_autoReconnect.value || attempt >= MAX_RECONNECT_ATTEMPTS) break
+                attempt++
+                setAttempt(address, attempt)
+                delay(RECONNECT_DELAYS_MS[minOf(attempt - 1, RECONNECT_DELAYS_MS.lastIndex)])
+                if (connectionOf(address) !== conn) continue
+                Log.i(TAG, "reconnecting $address ($attempt/$MAX_RECONNECT_ATTEMPTS)")
+                replaceConnection(address)
             }
+            setAttempt(address, null)
         }
+    }
+
+    /** 自動再接続をやめる（その台は「接続できませんでした」のまま残る） */
+    fun stopReconnecting(address: String) {
+        retryJobs.remove(address)?.cancel()
+        setAttempt(address, null)
     }
 
     /** 並列・直列で機器を追加するためにスキャン画面を開いているか */
@@ -265,6 +306,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
             val unit = newUnit(device.address, name)
             _units.value = listOf(unit)
             persistUnits()
+            supervise(unit.address)
             select(unit.address)
             return
         }
@@ -276,6 +318,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         }
         _units.value = _units.value + newUnit(device.address, name)
         persistUnits()
+        supervise(device.address)
     }
 
     private fun newUnit(address: String, name: String) =
@@ -305,22 +348,31 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         select(address)
     }
 
-    /** 指定した機器をつなぎ直す（接続オブジェクトを作り直す） */
+    /** 手動でつなぎ直す（「再接続」ボタン）。自動再接続の回数も最初から数え直す */
     fun reconnectUnit(address: String) {
+        if (connectionOf(address) == null) return
+        retryJobs.remove(address)?.cancel()
+        setAttempt(address, null)
+        replaceConnection(address)
+        supervise(address)
+    }
+
+    /**
+     * 接続オブジェクトを作り直す。同じ機器なので、設定画面のパスワード確認や履歴はそのまま残す。
+     */
+    private fun replaceConnection(address: String) {
         val old = _units.value.firstOrNull { it.address == address } ?: return
         old.connection.close()
         val fresh = newUnit(address, old.name)
         _units.value = _units.value.map { if (it.address == address) fresh else it }
-        if (_connection.value === old.connection) {
-            resetSettingsState()
-            _connection.value = fresh.connection
-        }
+        if (_connection.value === old.connection) _connection.value = fresh.connection
     }
 
     /** 1 台を外す。「前回の機器」からも外す */
     fun removeUnit(address: String) {
         val unit = _units.value.firstOrNull { it.address == address } ?: return
         retryJobs.remove(address)?.cancel()
+        setAttempt(address, null)
         unit.connection.close()
         if (_connection.value === unit.connection) {
             _connection.value = null
@@ -334,6 +386,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
     fun disconnectAll() {
         retryJobs.values.forEach { it.cancel() }
         retryJobs.clear()
+        _reconnecting.value = emptyMap()
         _units.value.forEach { it.connection.close() }
         _units.value = emptyList()
         _connection.value = null
@@ -552,13 +605,16 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         _units.value.forEach { it.connection.close() }
     }
 
-    private companion object {
+    companion object {
         const val TAG = "BmsViewModel"
         const val PREF_MODE = "pack_mode"
         const val PREF_SAVED = "saved_devices"
         const val PREF_AUTO_CONNECT = "auto_connect"
-        const val AUTO_RETRY_COUNT = 3
-        const val AUTO_RETRY_DELAY_MS = 10_000L
+        const val PREF_AUTO_RECONNECT = "auto_reconnect"
+
+        /** つなぎ直す最大回数と、回ごとの待ち時間（約 4 分間試す） */
+        const val MAX_RECONNECT_ATTEMPTS = 10
+        val RECONNECT_DELAYS_MS = longArrayOf(3_000, 5_000, 10_000, 15_000, 30_000)
 
         /** 念のための上限（127 レジスタ × 7 件 × 100 ページ = 700 件） */
         const val MAX_HISTORY_PAGES = 100

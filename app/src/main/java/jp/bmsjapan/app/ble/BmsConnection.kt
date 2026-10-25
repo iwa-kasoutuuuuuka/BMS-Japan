@@ -85,7 +85,24 @@ class BmsConnection(
         }
         _state.value = ConnectionState.CONNECTING
         assembler.reset()
-        gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+        val g = runCatching { device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE) }.getOrNull()
+        if (g == null) {
+            // Bluetooth がオフのときなどは null が返る
+            _state.value = ConnectionState.FAILED
+            return
+        }
+        gatt = g
+        // 機器が見つからないとき、Android 側のタイムアウトを待つと長いので自分でも区切る
+        scope.launch {
+            delay(CONNECT_TIMEOUT_MS)
+            if (_state.value == ConnectionState.CONNECTING) {
+                Log.w(TAG, "connect timeout $address")
+                runCatching { g.disconnect() }
+                runCatching { g.close() }
+                if (gatt === g) gatt = null
+                _state.value = ConnectionState.FAILED
+            }
+        }
     }
 
     fun close() {
@@ -327,5 +344,8 @@ class BmsConnection(
         const val TAG = "BmsConnection"
         const val OP_TIMEOUT_MS = 10_000L
         const val REPLY_TIMEOUT_MS = 3_000L
+
+        /** 接続〜初期設定（MTU・サービス探索・Notify）までの上限 */
+        const val CONNECT_TIMEOUT_MS = 35_000L
     }
 }

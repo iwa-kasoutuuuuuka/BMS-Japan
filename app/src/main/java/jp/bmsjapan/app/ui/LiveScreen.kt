@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -72,6 +73,9 @@ fun DeviceScreen(vm: BmsViewModel) {
     val live by vm.live.collectAsState()
     val lastUpdate by vm.lastUpdate.collectAsState()
     val name by vm.selectedName.collectAsState()
+    val selectedConnection by vm.connection.collectAsState()
+    val address = selectedConnection?.address
+    val reconnecting by vm.reconnecting.collectAsState()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
@@ -143,7 +147,20 @@ fun DeviceScreen(vm: BmsViewModel) {
                 .fillMaxSize(),
         ) {
             val data = live
+            val attempt = reconnecting[address]
             when {
+                // 自動でつなぎ直している最中（切断・失敗・接続中のどれでも）
+                attempt != null && (state != ConnectionState.CONNECTED || data == null) -> Centered {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(16.dp))
+                    Text(stringResource(R.string.reconnecting_title))
+                    Text(
+                        stringResource(R.string.reconnecting_detail, attempt, BmsViewModel.MAX_RECONNECT_ATTEMPTS),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedButton(onClick = { address?.let(vm::stopReconnecting) }) { Text(stringResource(R.string.action_stop_reconnect)) }
+                }
                 state == ConnectionState.FAILED || state == ConnectionState.DISCONNECTED -> Centered {
                     Text(stringResource(if (state == ConnectionState.FAILED) R.string.connect_failed else R.string.disconnected))
                     Spacer(Modifier.height(16.dp))
