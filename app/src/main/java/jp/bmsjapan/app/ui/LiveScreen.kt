@@ -22,6 +22,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.NavigationBar
@@ -137,6 +139,7 @@ fun DeviceScreen(vm: BmsViewModel) {
                             Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.action_refresh))
                         }
                     }
+                    ThemeMenuButton(vm)
                 },
             )
         },
@@ -201,6 +204,7 @@ internal fun Centered(content: @Composable () -> Unit) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LiveContent(d: LiveData, lastUpdate: Long?) {
+    val colors = LocalBmsColors.current
     Column(
         Modifier
             .fillMaxSize()
@@ -208,72 +212,116 @@ private fun LiveContent(d: LiveData, lastUpdate: Long?) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        SocCard(d)
-
-        Section(stringResource(R.string.section_pack)) {
-            MetricGrid(
-                listOf(
-                    stringResource(R.string.label_total_voltage) to "%.1f V".format(d.totalVoltage),
-                    // 符号の向きは機種で違う可能性があるため、向きは状態（充電中/放電中）で示し、ここは大きさだけ出す
-                    stringResource(R.string.label_current) to "%.1f A".format(abs(d.current)),
-                    stringResource(R.string.label_power) to "%.3f kW".format(d.powerKw),
-                    stringResource(R.string.label_remaining) to "%.1f Ah".format(d.remainingCapacity),
-                    stringResource(R.string.label_cycles) to stringResource(R.string.cycles_format, d.cycleCount),
-                    stringResource(R.string.label_cell_count) to stringResource(R.string.cells_format, d.cellCount),
-                ),
-            )
+        // ---- SOC のリングと状態 ----
+        BmsCard {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 20.dp, horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                SocGauge(
+                    soc = d.soc,
+                    subtitle = stringResource(R.string.gauge_remaining, "%.1f".format(d.remainingCapacity)),
+                )
+                Spacer(Modifier.height(4.dp))
+                StateChip(stateLabel(d.state), stateColor(d.state))
+                Spacer(Modifier.height(16.dp))
+                MetricTiles(
+                    listOf(
+                        Metric(stringResource(R.string.label_total_voltage), "%.1f".format(d.totalVoltage), "V", colors.gaugeStart),
+                        // 符号の向きは機種で違う可能性があるため、向きは状態（充電中/放電中）で示し、ここは大きさだけ出す
+                        Metric(stringResource(R.string.label_current), "%.1f".format(abs(d.current)), "A", stateColor(d.state)),
+                        Metric(stringResource(R.string.label_power), "%.3f".format(d.powerKw), "kW", colors.mixed),
+                        Metric(stringResource(R.string.label_cycles), d.cycleCount.toString(), stringResource(R.string.unit_times)),
+                    ),
+                )
+            }
         }
 
         Section(stringResource(R.string.section_switches)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SwitchBadge(stringResource(R.string.label_charge_mos), d.chargeMos, Modifier.weight(1f))
-                SwitchBadge(stringResource(R.string.label_discharge_mos), d.dischargeMos, Modifier.weight(1f))
-                SwitchBadge(stringResource(R.string.label_balancing), d.balancing, Modifier.weight(1f))
+                SwitchPill(stringResource(R.string.label_charge_mos), d.chargeMos, Modifier.weight(1f))
+                SwitchPill(stringResource(R.string.label_discharge_mos), d.dischargeMos, Modifier.weight(1f))
+                SwitchPill(stringResource(R.string.label_balancing), d.balancing, Modifier.weight(1f))
             }
         }
 
-        Section(stringResource(R.string.section_cells)) {
-            MetricGrid(
+        Section(stringResource(R.string.section_cells_count, d.cellCount)) {
+            MetricTiles(
                 listOf(
-                    stringResource(R.string.label_cell_max) to "%.3f V".format(d.maxCellVoltage),
-                    stringResource(R.string.label_cell_min) to "%.3f V".format(d.minCellVoltage),
-                    stringResource(R.string.label_cell_avg) to "%.3f V".format(d.averageCellVoltage),
-                    stringResource(R.string.label_cell_delta) to "%.0f mV".format(d.cellVoltageDelta * 1000),
+                    Metric(stringResource(R.string.label_cell_max), "%.3f".format(d.maxCellVoltage), "V", colors.cellMax),
+                    Metric(stringResource(R.string.label_cell_min), "%.3f".format(d.minCellVoltage), "V", colors.cellMin),
+                    Metric(stringResource(R.string.label_cell_avg), "%.3f".format(d.averageCellVoltage), "V"),
+                    Metric(
+                        stringResource(R.string.label_cell_delta),
+                        "%.0f".format(d.cellVoltageDelta * 1000),
+                        "mV",
+                        if (d.cellVoltageDelta >= 0.05) colors.discharge else colors.good,
+                    ),
                 ),
             )
-            Spacer(Modifier.height(8.dp))
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                d.cellVoltages.forEachIndexed { i, v ->
-                    CellChip(
-                        index = i + 1,
-                        volts = v,
-                        isMax = d.cellVoltages.size > 1 && v == d.cellVoltages.max(),
-                        isMin = d.cellVoltages.size > 1 && v == d.cellVoltages.min(),
-                    )
+            Spacer(Modifier.height(12.dp))
+            if (d.cellVoltages.isNotEmpty()) {
+                val maxV = d.cellVoltages.max()
+                val minV = d.cellVoltages.min()
+                // 1 行 4 個で幅いっぱいに並べる（端数の行は空きで埋める）
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    d.cellVoltages.withIndex().chunked(4).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            row.forEach { (i, v) ->
+                                CellTile(
+                                    index = i + 1,
+                                    volts = v,
+                                    minV = minV,
+                                    maxV = maxV,
+                                    isMax = d.cellVoltages.size > 1 && v == maxV,
+                                    isMin = d.cellVoltages.size > 1 && v == minV,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                        }
+                    }
                 }
             }
         }
 
         Section(stringResource(R.string.section_temperature)) {
-            MetricGrid(
+            MetricTiles(
                 listOf(
-                    stringResource(R.string.label_temp_max) to "${d.maxTemperature} ℃",
-                    stringResource(R.string.label_temp_min) to "${d.minTemperature} ℃",
+                    Metric(stringResource(R.string.label_temp_max), d.maxTemperature.toString(), "℃", colors.cellMax),
+                    Metric(stringResource(R.string.label_temp_min), d.minTemperature.toString(), "℃", colors.cellMin),
                 ) + d.temperatures.mapIndexed { i, t ->
-                    stringResource(R.string.label_temp_sensor, i + 1) to "$t ℃"
+                    Metric(stringResource(R.string.label_temp_sensor, i + 1), t.toString(), "℃")
                 },
             )
         }
 
         Section(stringResource(R.string.section_alarms)) {
             if (d.alarms.isEmpty()) {
-                Text(stringResource(R.string.no_alarms), color = MaterialTheme.colorScheme.primary)
+                StateChip(stringResource(R.string.no_alarms), colors.good)
             } else {
-                d.alarms.forEach { a ->
-                    Text("⚠ " + stringResource(a.label), color = MaterialTheme.colorScheme.error)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    d.alarms.forEach { a ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.errorContainer)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Filled.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(a.label), color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
                 }
             }
         }
@@ -281,104 +329,31 @@ private fun LiveContent(d: LiveData, lastUpdate: Long?) {
         lastUpdate?.let {
             Text(
                 stringResource(R.string.last_update, SimpleDateFormat("HH:mm:ss", Locale.JAPAN).format(Date(it))),
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.End,
+                textAlign = TextAlign.Center,
             )
         }
     }
 }
 
 @Composable
-private fun SocCard(d: LiveData) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("%.1f".format(d.soc), fontSize = 48.sp, fontWeight = FontWeight.Bold)
-                Text(" %", fontSize = 24.sp, modifier = Modifier.padding(bottom = 8.dp))
-                Spacer(Modifier.weight(1f))
-                Text(
-                    stringResource(
-                        when (d.state) {
-                            ChargeState.CHARGING -> R.string.state_charging
-                            ChargeState.DISCHARGING -> R.string.state_discharging
-                            ChargeState.IDLE -> R.string.state_idle
-                            ChargeState.UNKNOWN -> R.string.state_unknown
-                        },
-                    ),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 12.dp),
-                )
-            }
-            LinearProgressIndicator(
-                progress = { (d.soc / 100.0).toFloat().coerceIn(0f, 1f) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(10.dp),
-            )
-        }
-    }
-}
+internal fun stateLabel(state: ChargeState): String = stringResource(
+    when (state) {
+        ChargeState.CHARGING -> R.string.state_charging
+        ChargeState.DISCHARGING -> R.string.state_discharging
+        ChargeState.IDLE -> R.string.state_idle
+        ChargeState.UNKNOWN -> R.string.state_unknown
+    },
+)
 
 @Composable
-internal fun Section(title: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            content()
-        }
-    }
-}
-
-@Composable
-private fun MetricGrid(items: List<Pair<String, String>>) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items.chunked(2).forEach { row ->
-            Row(Modifier.fillMaxWidth()) {
-                row.forEach { (label, value) ->
-                    Column(Modifier.weight(1f)) {
-                        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(value, style = MaterialTheme.typography.titleMedium)
-                    }
-                }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
-            }
-        }
-    }
-}
-
-@Composable
-private fun SwitchBadge(label: String, on: Boolean, modifier: Modifier = Modifier) {
-    val bg = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-    val fg = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-    Column(
-        modifier
-            .background(bg, RoundedCornerShape(12.dp))
-            .padding(vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(label, color = fg, style = MaterialTheme.typography.bodySmall)
-        Text(stringResource(if (on) R.string.on else R.string.off), color = fg, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
-private fun CellChip(index: Int, volts: Double, isMax: Boolean, isMin: Boolean) {
-    val bg = when {
-        isMax -> Color(0xFFFFE0B2)
-        isMin -> Color(0xFFBBDEFB)
-        else -> MaterialTheme.colorScheme.surfaceVariant
-    }
-    val fg = if (isMax || isMin) Color(0xFF1B1B1B) else MaterialTheme.colorScheme.onSurfaceVariant
-    Column(
-        Modifier
-            .width(72.dp)
-            .background(bg, RoundedCornerShape(8.dp))
-            .padding(vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text("#$index", style = MaterialTheme.typography.labelSmall, color = fg)
-        Text("%.3f".format(volts), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = fg)
+internal fun stateColor(state: ChargeState): Color {
+    val c = LocalBmsColors.current
+    return when (state) {
+        ChargeState.CHARGING -> c.charge
+        ChargeState.DISCHARGING -> c.discharge
+        else -> c.idle
     }
 }

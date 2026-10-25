@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 起動直後（Compose が描画されるまで）の背景。ダークで白く光らないようにする -->
+    <style name="Theme.BmsJapan" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+    <color name="window_background">#F4F7FB</color>
+</resources>

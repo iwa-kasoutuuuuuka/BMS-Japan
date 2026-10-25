@@ -18,7 +18,7 @@ Windows などの PC から Bluetooth LE で見たり設定したりするため
 ## インストール
 
 ```powershell
-cd G:\100BMS\BMS-Japan\pc
+cd D:\100BMS\BMS-Japan\pc
 py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
@@ -97,7 +97,7 @@ MCP サーバーのデモはプロセスが動いている間だけ残ります�
 
 ## MCP サーバー
 
-起動コマンド: `G:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe -m bms_japan.mcp_server`（stdio）
+起動コマンド: `D:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe -m bms_japan.mcp_server`（stdio）
 
 ### ツール
 
@@ -116,7 +116,7 @@ MCP サーバーのデモはプロセスが動いている間だけ残ります�
 
 ### Claude Code に登録する
 
-このリポジトリには、プロジェクト用の設定 `G:\100BMS\BMS-Japan\.mcp.json` が入っています（`bms-japan` = 実機、`bms-japan-demo` = デモ）。
+このリポジトリには、プロジェクト用の設定 `.mcp.json`（パスはリポジトリからの相対パス）が入っています（`bms-japan` = 実機、`bms-japan-demo` = デモ）。
 リポジトリのフォルダで Claude Code を起動すると、初回に使ってよいか確認されます。
 
 ```json
@@ -124,13 +124,13 @@ MCP サーバーのデモはプロセスが動いている間だけ残ります�
   "mcpServers": {
     "bms-japan": {
       "type": "stdio",
-      "command": "G:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe",
+      "command": "D:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe",
       "args": ["-m", "bms_japan.mcp_server"],
       "env": {}
     },
     "bms-japan-demo": {
       "type": "stdio",
-      "command": "G:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe",
+      "command": "D:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe",
       "args": ["-m", "bms_japan.mcp_server"],
       "env": { "BMS_JAPAN_DEMO": "1" }
     }
@@ -141,9 +141,9 @@ MCP サーバーのデモはプロセスが動いている間だけ残ります�
 コマンドで登録する場合（どのフォルダからでも使いたいときは `--scope user` を付けます）:
 
 ```powershell
-claude mcp add bms-japan -- G:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe -m bms_japan.mcp_server
+claude mcp add bms-japan -- D:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe -m bms_japan.mcp_server
 # 実機なしで試す
-claude mcp add bms-japan-demo -e BMS_JAPAN_DEMO=1 -- G:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe -m bms_japan.mcp_server
+claude mcp add bms-japan-demo -e BMS_JAPAN_DEMO=1 -- D:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe -m bms_japan.mcp_server
 ```
 
 ### Google Antigravity に登録する
@@ -158,7 +158,7 @@ Antigravity は Claude Desktop と同じ `mcpServers` 形式の `mcp_config.json
 {
   "mcpServers": {
     "bms-japan": {
-      "command": "G:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe",
+      "command": "D:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe",
       "args": ["-m", "bms_japan.mcp_server"],
       "env": {}
     }

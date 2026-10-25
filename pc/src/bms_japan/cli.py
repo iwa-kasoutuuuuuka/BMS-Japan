@@ -346,8 +346,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("password", help="BMS のパスワードを変更する")
     sp = s.add_subparsers(dest="password_cmd", required=True, metavar="change")
     pc = sp.add_parser("change", parents=[common], help="パスワードを変更する（6 桁の数字）")
-    pc.add_argument("--old", help="今のパスワード（省略すると入力を求めます）")
-    pc.add_argument("--new", help="新しいパスワード（6 桁の数字）")
+    pc.add_argument("--old", help="今のパスワード（省略すると入力を求めます。コマンド履歴に残るため省略を推奨）")
+    pc.add_argument("--new", help="新しいパスワード（6 桁の数字。省略すると入力を求めます。省略を推奨）")
     pc.add_argument("--repeat", help="新しいパスワード（確認用。省略時は --new と同じ）")
     pc.add_argument("-y", "--yes", action="store_true", help="確認なしで書き込む")
 

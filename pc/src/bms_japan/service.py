@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -43,7 +42,10 @@ log = logging.getLogger(__name__)
 
 CURRENT_SIGN_NOTE = "電流の符号（向き）は実機で未確認のため、大きさと状態（レジスタ47）で表示しています。"
 
-HISTORY_MAX_PAGES = 64  # 安全のための上限（448 件）
+HISTORY_MAX_PAGES = 64  # 1 回に読むページ数の上限（448 件）
+#: 履歴として読めるページ番号の上限（Android 版と同じ 100 ページ = 700 件）。
+#: 256 + page が別のレジスタ（パスワードなど）に届かないようにする
+HISTORY_PAGE_LIMIT = 100
 
 
 class BmsJapanError(Exception):
@@ -60,7 +62,10 @@ def env_flag(name: str) -> bool:
 
 
 def default_demo_state_file() -> Path:
-    return Path(tempfile.gettempdir()) / "bms_japan_demo_state.json"
+    # 共有の一時フォルダだと、他のユーザーが同名のファイルやリンクを先に置けてしまうため
+    d = Path.home() / ".bms_japan"
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return d / "demo_state.json"
 
 
 def q(value: Any, unit: str | None, label: str, **extra: Any) -> dict[str, Any]:
@@ -599,9 +604,9 @@ async def get_history(
     pages: int = 1,
     address: str | None = None,
 ) -> dict[str, Any]:
-    if page < 0:
-        raise BmsJapanError("invalid_page", "page は 0 以上にしてください")
-    pages = max(1, min(HISTORY_MAX_PAGES, pages))
+    if page < 0 or page >= HISTORY_PAGE_LIMIT:
+        raise BmsJapanError("invalid_page", f"page は 0〜{HISTORY_PAGE_LIMIT - 1} にしてください")
+    pages = max(1, min(HISTORY_MAX_PAGES, pages, HISTORY_PAGE_LIMIT - page))
     c = await mgr.client(address)
     records: list[HistoryRecord] = []
     reached_end = False

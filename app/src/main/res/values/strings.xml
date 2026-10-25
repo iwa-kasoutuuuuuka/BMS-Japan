@@ -38,7 +38,6 @@
     <string name="pack_temp_range">温度（最低〜最高）</string>
     <string name="pack_alarm_units">%1$d台で発生中</string>
     <string name="state_mixed">充電・放電が混在</string>
-    <string name="unit_line">SOC %1$s%% ／ %2$s V ／ %3$s A ／ %4$s</string>
     <string name="unit_alarms">アラーム %1$d件</string>
     <string name="action_add_unit">BMSを追加</string>
     <string name="action_add_unit_count">BMSを追加（%1$d／%2$d台）</string>
@@ -77,22 +76,16 @@
     <string name="state_discharging">放電中</string>
     <string name="state_idle">待機中</string>
     <string name="state_unknown">状態不明</string>
-    <string name="section_pack">バッテリー</string>
     <string name="label_total_voltage">総電圧</string>
     <string name="label_current">電流</string>
     <string name="label_power">電力</string>
-    <string name="label_remaining">残り容量</string>
     <string name="label_cycles">サイクル回数</string>
-    <string name="cycles_format">%1$d 回</string>
-    <string name="label_cell_count">セル数</string>
-    <string name="cells_format">%1$d セル</string>
     <string name="section_switches">スイッチ</string>
     <string name="label_charge_mos">充電MOS</string>
     <string name="label_discharge_mos">放電MOS</string>
     <string name="label_balancing">均等化</string>
     <string name="on">ON</string>
     <string name="off">OFF</string>
-    <string name="section_cells">セル電圧</string>
     <string name="label_cell_max">最高</string>
     <string name="label_cell_min">最低</string>
     <string name="label_cell_avg">平均</string>
@@ -103,6 +96,18 @@
     <string name="label_temp_sensor">センサー%1$d</string>
     <string name="section_alarms">アラーム</string>
     <string name="no_alarms">異常はありません</string>
+
+    <!-- デザイン・表示モード -->
+    <string name="gauge_remaining">残り %1$s Ah</string>
+    <string name="unit_times">回</string>
+    <string name="section_cells_count">セル電圧（%1$dセル）</string>
+    <string name="unit_line_short">SOC %1$s%%  ·  %2$s V  ·  %3$s A</string>
+    <string name="battery_type_tap">タップしてプリセットを選ぶ</string>
+    <string name="action_demo">デモ</string>
+    <string name="theme_menu">表示モード</string>
+    <string name="theme_system">端末の設定に合わせる</string>
+    <string name="theme_light">ライト</string>
+    <string name="theme_dark">ダーク（ナイトモード）</string>
 
     <!-- タブ -->
     <string name="tab_live">ライブ</string>
@@ -181,6 +186,7 @@
 
     <!-- 設定: 結果 -->
     <string name="msg_write_ok">設定しました</string>
+    <string name="msg_preset_bad_cells">セル数（%1$s）が正しく読めないため、電池の種類は変更しませんでした</string>
     <string name="msg_write_failed">設定できませんでした（BMSから応答がありません）</string>
     <string name="msg_read_failed">設定値を読み出せませんでした</string>
 

@@ -128,6 +128,10 @@ fun ScanScreen(vm: BmsViewModel) {
                         }
                     }
                 },
+                actions = {
+                    if (!adding) TextButton(onClick = vm::startDemo) { Text(stringResource(R.string.action_demo)) }
+                    ThemeMenuButton(vm)
+                },
             )
         },
     ) { padding ->

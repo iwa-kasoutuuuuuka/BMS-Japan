@@ -191,7 +191,7 @@ async def get_settings(address: Address = None) -> dict[str, Any]:
 )
 async def get_history(
     address: Address = None,
-    page: Annotated[int, Field(description="最初のページ（0 から）/ first page (0-based)", ge=0)] = 0,
+    page: Annotated[int, Field(description="最初のページ（0〜99）/ first page (0-99)", ge=0, le=svc.HISTORY_PAGE_LIMIT - 1)] = 0,
     pages: Annotated[int, Field(description="読むページ数 / number of pages", ge=1, le=svc.HISTORY_MAX_PAGES)] = 4,
 ) -> dict[str, Any]:
     return await svc.get_history(manager(), page, pages, address)

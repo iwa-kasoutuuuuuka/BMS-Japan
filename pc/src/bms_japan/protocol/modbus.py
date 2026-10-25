@@ -47,6 +47,9 @@ def is_crc_valid(frame: bytes | bytearray) -> bool:
 
 
 def u16(v: int) -> bytes:
+    """16bit に収まらない値は黙って切り詰めず、エラーにする（誤った値を BMS に書かないため）"""
+    if not 0 <= v <= 0xFFFF:
+        raise ValueError(f"value out of 16-bit range: {v}")
     return bytes(((v >> 8) & 0xFF, v & 0xFF))
 
 
@@ -103,6 +106,30 @@ def sync_time(year: int, month: int, day: int, hour: int, minute: int, second: i
 
 def to_hex(data: bytes | bytearray) -> str:
     return bytes(data).hex().upper()
+
+
+def redact_for_log(frame: bytes | bytearray) -> str:
+    """ログ用の 16 進表記。パスワード（レジスタ 201〜203）を含むフレームは中身を伏せる。
+
+    - 201〜203 にかかる書き込み（0x06 / 0x10）
+    - 6 バイトの読み出し応答（パスワードの読み出しへの応答と同じ形）
+    """
+    b = bytes(frame)
+    h = to_hex(b)
+    if len(b) < 3:
+        return h
+    fn = b[1]
+    hidden = "...(password hidden)"
+    if fn == 0x03 and b[2] == 6:
+        return h[:6] + hidden
+    if fn == 0x06 and len(b) >= 6 and 201 <= int.from_bytes(b[2:4], "big") <= 203:
+        return h[:8] + hidden
+    if fn == 0x10 and len(b) > 8:
+        start = int.from_bytes(b[2:4], "big")
+        end = start + int.from_bytes(b[4:6], "big") - 1
+        if start <= 203 and end >= 201:
+            return h[:12] + hidden
+    return h
 
 
 def hex_to_bytes(s: str) -> bytes:

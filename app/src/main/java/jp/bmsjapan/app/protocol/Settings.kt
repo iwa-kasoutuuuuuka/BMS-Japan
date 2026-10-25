@@ -144,6 +144,8 @@ sealed interface ValidationResult {
 
 fun Setting.validate(input: String, current: BmsSettings): ValidationResult {
     val v = input.trim().replace(',', '.').toDoubleOrNull() ?: return ValidationResult.NotANumber
+    // "NaN" や "Infinity" も数値として読めてしまうので、ここで弾く（範囲の比較をすり抜けるため）
+    if (!v.isFinite()) return ValidationResult.NotANumber
     if (v < min - 1e-9 || v > max + 1e-9) return ValidationResult.OutOfRange(format(min), format(max))
     val release = current.release(this)
     if (release != null) {
@@ -163,6 +165,9 @@ fun Setting.validate(input: String, current: BmsSettings): ValidationResult {
  * セル過電圧・低電圧・総電圧の保護/解除値と均等化開始電圧をプリセットに置き換え、それ以外は今の値をそのまま送り返す。
  */
 fun buildBatteryPreset(type: BatteryType, cellCount: Int, current: BmsSettings): IntArray? {
+    // セル数は BMS から読んだ値。0 や異常に大きい値だと総電圧の保護値が 0 V などになるので書かない
+    if (cellCount !in MIN_PRESET_CELLS..MAX_PRESET_CELLS) return null
+    if (!type.availableFor(cellCount)) return null
     val start = 137
     val count = 27
     val values = IntArray(count)
@@ -198,10 +203,15 @@ object ActualCapacity {
     /** 入力（Ah）を確認して mAh を返す。だめなら null */
     fun parse(input: String): Int? {
         val ah = input.trim().replace(',', '.').toDoubleOrNull() ?: return null
+        if (!ah.isFinite()) return null
         if (ah < MIN_AH - 1e-9 || ah > MAX_AH + 1e-9) return null
         return (ah * 1000).roundToInt()
     }
 }
+
+/** 電池の種類のプリセットを書いてよいセル数（この BMS は最大 48 セル） */
+const val MIN_PRESET_CELLS = 1
+const val MAX_PRESET_CELLS = 48
 
 /** パスワード（レジスタ 201〜203、ASCII 6 文字） */
 object BmsPassword {

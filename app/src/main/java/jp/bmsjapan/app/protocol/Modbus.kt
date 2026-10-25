@@ -61,7 +61,34 @@ object Modbus {
         return withCrc(body)
     }
 
-    private fun u16(v: Int): ByteArray = byteArrayOf((v ushr 8 and 0xFF).toByte(), (v and 0xFF).toByte())
+    /** 16bit に収まらない値は黙って切り詰めず、エラーにする（誤った値を BMS に書かないため） */
+    private fun u16(v: Int): ByteArray {
+        require(v in 0..0xFFFF) { "value out of 16-bit range: $v" }
+        return byteArrayOf((v ushr 8 and 0xFF).toByte(), (v and 0xFF).toByte())
+    }
+
+    /**
+     * ログ用の 16 進表記。パスワード（レジスタ 201〜203）を含むフレームは中身を伏せる。
+     * - 201〜203 にかかる書き込み（0x06 / 0x10）
+     * - 6 バイトの読み出し応答（パスワードの読み出しへの応答と同じ形）
+     */
+    fun redactForLog(frame: ByteArray): String {
+        val hex = frame.toHex()
+        if (frame.size < 3) return hex
+        val fn = frame[1].toInt() and 0xFF
+        fun u16At(i: Int) = ((frame[i].toInt() and 0xFF) shl 8) or (frame[i + 1].toInt() and 0xFF)
+        val hidden = "…(パスワードを含むため非表示)"
+        return when {
+            fn == FN_READ && (frame[2].toInt() and 0xFF) == 6 -> hex.take(6) + hidden
+            fn == FN_WRITE_SINGLE && frame.size >= 6 && u16At(2) in 201..203 -> hex.take(8) + hidden
+            fn == FN_WRITE_MULTI && frame.size > 8 -> {
+                val start = u16At(2)
+                val end = start + u16At(4) - 1
+                if (start <= 203 && end >= 201) hex.take(12) + hidden else hex
+            }
+            else -> hex
+        }
+    }
 }
 
 /** よく使うコマンド */

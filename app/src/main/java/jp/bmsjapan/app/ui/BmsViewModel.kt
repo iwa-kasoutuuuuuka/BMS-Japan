@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.util.Log
 import androidx.annotation.StringRes
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import jp.bmsjapan.app.R
@@ -19,6 +20,7 @@ import jp.bmsjapan.app.protocol.BatteryType
 import jp.bmsjapan.app.protocol.Modbus
 import jp.bmsjapan.app.protocol.BmsPassword
 import jp.bmsjapan.app.protocol.BmsSettings
+import jp.bmsjapan.app.protocol.DemoBms
 import jp.bmsjapan.app.protocol.HistoryProtocol
 import jp.bmsjapan.app.protocol.HistoryRecord
 import jp.bmsjapan.app.protocol.LiveData
@@ -116,6 +118,17 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
     // ---- つなぎ方（単体・並列・直列） ----
     private val prefs = app.getSharedPreferences("bms_japan", Context.MODE_PRIVATE)
 
+    // ---- 表示モード（自動・ライト・ダーク） ----
+    private val _themeMode = MutableStateFlow(
+        runCatching { ThemeMode.valueOf(prefs.getString(PREF_THEME, ThemeMode.SYSTEM.name)!!) }.getOrDefault(ThemeMode.SYSTEM),
+    )
+    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    fun setThemeMode(m: ThemeMode) {
+        _themeMode.value = m
+        prefs.edit { putString(PREF_THEME, m.name) }
+    }
+
     private val _mode = MutableStateFlow(PackMode.fromCode(prefs.getInt(PREF_MODE, PackMode.SINGLE.code)))
     val mode: StateFlow<PackMode> = _mode.asStateFlow()
 
@@ -124,7 +137,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         if (m == _mode.value) return
         if (_units.value.size > m.maxUnits) disconnectAll()
         _mode.value = m
-        prefs.edit().putInt(PREF_MODE, m.code).apply()
+        prefs.edit { putInt(PREF_MODE, m.code) }
     }
 
     // ---- 接続中の機器 ----
@@ -143,21 +156,21 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setAutoConnect(on: Boolean) {
         _autoConnect.value = on
-        prefs.edit().putBoolean(PREF_AUTO_CONNECT, on).apply()
+        prefs.edit { putBoolean(PREF_AUTO_CONNECT, on) }
     }
 
     /** 今つないでいる機器を「前回の機器」として保存する */
     private fun persistUnits() {
-        val list = _units.value
+        val list = _units.value.filterNot { it.address.startsWith(DEMO_PREFIX) }
         if (list.isEmpty()) return
         val setup = SavedSetup(_mode.value, list.map { SavedDevice(it.address, it.name) })
         _saved.value = setup
-        prefs.edit().putString(PREF_SAVED, SavedDevicesCodec.encode(setup)).apply()
+        prefs.edit { putString(PREF_SAVED, SavedDevicesCodec.encode(setup)) }
     }
 
     fun forgetSaved() {
         _saved.value = null
-        prefs.edit().remove(PREF_SAVED).apply()
+        prefs.edit { remove(PREF_SAVED) }
     }
 
     /**
@@ -179,7 +192,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         stopScan()
         disconnectAll()
         _mode.value = setup.mode
-        prefs.edit().putInt(PREF_MODE, setup.mode.code).apply()
+        prefs.edit { putInt(PREF_MODE, setup.mode.code) }
         _units.value = setup.devices.map { newUnit(it.address, it.name) }
         setup.devices.forEach { supervise(it.address) }
         if (setup.mode == PackMode.SINGLE) setup.devices.firstOrNull()?.let { select(it.address) }
@@ -193,7 +206,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setAutoReconnect(on: Boolean) {
         _autoReconnect.value = on
-        prefs.edit().putBoolean(PREF_AUTO_RECONNECT, on).apply()
+        prefs.edit { putBoolean(PREF_AUTO_RECONNECT, on) }
     }
 
     /** つなぎ直している機器と、その回数（アドレス → 何回目か） */
@@ -321,8 +334,21 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         supervise(device.address)
     }
 
-    private fun newUnit(address: String, name: String) =
-        PackUnit(address, name, BmsConnection(getApplication(), address).also { it.connect() })
+    private fun newUnit(address: String, name: String): PackUnit {
+        // デモ機器はアドレスが "DEMO-" で始まる。BLE を使わず疑似 BMS につなぐ
+        val demo = if (address.startsWith(DEMO_PREFIX)) DemoBms(seed = address.removePrefix(DEMO_PREFIX).toIntOrNull() ?: 0) else null
+        return PackUnit(address, name, BmsConnection(getApplication(), address, demo = demo).also { it.connect() })
+    }
+
+    /** 実機なしで画面を試すデモ。単体なら 1 台、並列・直列なら 3 台の疑似 BMS につなぐ（前回の機器としては保存しない） */
+    fun startDemo() {
+        stopScan()
+        disconnectAll()
+        val count = if (_mode.value == PackMode.SINGLE) 1 else 3
+        _units.value = (0 until count).map { newUnit("$DEMO_PREFIX$it", "DEMO-BMS-${it + 1}") }
+        _units.value.forEach { supervise(it.address) }
+        if (_mode.value == PackMode.SINGLE) select(_units.value.first().address)
+    }
 
     /** 一覧から 1 台を選んで詳細画面を開く */
     fun select(address: String) {
@@ -379,7 +405,10 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
             resetSettingsState()
         }
         _units.value = _units.value - unit
-        if (_units.value.isEmpty()) forgetSaved() else persistUnits()
+        // デモ機器を外しても「前回の機器」は変えない
+        if (!address.startsWith(DEMO_PREFIX)) {
+            if (_units.value.none { !it.address.startsWith(DEMO_PREFIX) }) forgetSaved() else persistUnits()
+        }
     }
 
     /** すべて切断する。「前回の機器」は残す（次回の起動で自動接続できるように） */
@@ -496,7 +525,12 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
     fun applyBatteryType(type: BatteryType) {
         val s = _settings.value ?: return
         val cells = live.value?.cellCount ?: return
-        val values = buildBatteryPreset(type, cells, s) ?: return
+        val values = buildBatteryPreset(type, cells, s)
+        if (values == null) {
+            // セル数が 0 や 48 超など、BMS から読んだ値がおかしいときは書かない
+            _messages.tryEmit(UiMessage(R.string.msg_preset_bad_cells, cells.toString()))
+            return
+        }
         runWrite { c -> c.writeRegisters(137, values) }
     }
 
@@ -608,6 +642,8 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         const val TAG = "BmsViewModel"
         const val PREF_MODE = "pack_mode"
+        const val PREF_THEME = "theme_mode"
+        const val DEMO_PREFIX = "DEMO-"
         const val PREF_SAVED = "saved_devices"
         const val PREF_AUTO_CONNECT = "auto_connect"
         const val PREF_AUTO_RECONNECT = "auto_reconnect"

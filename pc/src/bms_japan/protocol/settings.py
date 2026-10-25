@@ -321,12 +321,22 @@ PRESET_START = 137
 PRESET_COUNT = 27
 
 
+#: 電池の種類のプリセットを書いてよいセル数（この BMS は最大 48 セル）
+MIN_PRESET_CELLS = 1
+MAX_PRESET_CELLS = 48
+
+
 def build_battery_preset(btype: BatteryType, cell_count: int, current: BmsSettings) -> list[int] | None:
     """電池の種類を変えるときの一括書き込み（元アプリと同じく 137 から 27 レジスタ）。
 
     セル過電圧・低電圧・総電圧の保護/解除値と均等化開始電圧をプリセットに置き換え、
     それ以外は今の値をそのまま送り返す。今の値が揃っていなければ None。
+    セル数（BMS から読んだ値）が 1〜48 でなければ None（0 だと総電圧の保護値が 0 V になるため）。
     """
+    if not MIN_PRESET_CELLS <= cell_count <= MAX_PRESET_CELLS:
+        return None
+    if not btype.available_for(cell_count):
+        return None
     values: list[int] = []
     for i in range(PRESET_COUNT):
         v = current.raw.get(PRESET_START + i)

@@ -8,15 +8,17 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import jp.bmsjapan.app.BuildConfig
 import jp.bmsjapan.app.protocol.BmsCommands
 import jp.bmsjapan.app.protocol.BmsFrame
+import jp.bmsjapan.app.protocol.DemoBms
 import jp.bmsjapan.app.protocol.FrameAssembler
 import jp.bmsjapan.app.protocol.LiveData
 import jp.bmsjapan.app.protocol.Modbus
-import jp.bmsjapan.app.protocol.toHex
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
@@ -57,7 +59,10 @@ class BmsConnection(
     private val context: Context,
     val address: String,
     private val pollIntervalMs: Long = 5_000,
+    /** デモモードのときの疑似 BMS。null なら実機に BLE で接続する */
+    private val demo: DemoBms? = null,
 ) {
+    val isDemo: Boolean get() = demo != null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val gattMutex = Mutex()
     private val transactionMutex = Mutex()
@@ -77,6 +82,17 @@ class BmsConnection(
     val lastUpdate: StateFlow<Long?> = _lastUpdate.asStateFlow()
 
     fun connect() {
+        if (demo != null) {
+            // デモ: BLE を使わず、少し待ってから接続済みにする
+            _state.value = ConnectionState.CONNECTING
+            assembler.reset()
+            scope.launch {
+                delay(700)
+                _state.value = ConnectionState.CONNECTED
+                startPolling()
+            }
+            return
+        }
         val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
         val device = adapter?.getRemoteDevice(address)
         if (device == null) {
@@ -209,7 +225,7 @@ class BmsConnection(
         val value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
         gattOp {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                g.writeDescriptor(cccd, value) == BluetoothGatt.GATT_SUCCESS
+                g.writeDescriptor(cccd, value) == BluetoothStatusCodes.SUCCESS
             } else {
                 @Suppress("DEPRECATION")
                 cccd.value = value
@@ -285,17 +301,27 @@ class BmsConnection(
                         reply.await()
                     }
                 } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                    Log.w(TAG, "no reply for ${frame.toHex()} (attempt ${attempt + 1})")
-                    lastError = BmsTimeoutException("no reply for ${frame.toHex()}")
+                    if (BuildConfig.DEBUG) Log.w(TAG, "no reply for ${Modbus.redactForLog(frame)} (attempt ${attempt + 1})")
+                    lastError = BmsTimeoutException("no reply (function 0x%02X)".format(frame[1].toInt() and 0xFF))
                 }
             }
             throw lastError ?: BmsTimeoutException("no reply")
         }
 
     private suspend fun sendRaw(frame: ByteArray) {
+        if (demo != null) {
+            // デモ: 疑似 BMS の応答を、本物の受信と同じ組み立て処理に通す
+            if (BuildConfig.DEBUG) Log.d(TAG, "TX(demo) ${Modbus.redactForLog(frame)}")
+            val reply = demo.handle(frame) ?: return
+            scope.launch {
+                delay(60)
+                for (f in assembler.feed(reply)) frames.emit(f)
+            }
+            return
+        }
         val g = gatt ?: error("not connected")
         val c = g.getService(BmsUuids.SERVICE)?.getCharacteristic(BmsUuids.WRITE) ?: error("write characteristic not found")
-        Log.d(TAG, "TX ${frame.toHex()}")
+        if (BuildConfig.DEBUG) Log.d(TAG, "TX ${Modbus.redactForLog(frame)}")
         write(g, c, frame)
     }
 
@@ -303,7 +329,7 @@ class BmsConnection(
         val type = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         val status = gattOp {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                g.writeCharacteristic(c, data, type) == BluetoothGatt.GATT_SUCCESS
+                g.writeCharacteristic(c, data, type) == BluetoothStatusCodes.SUCCESS
             } else {
                 @Suppress("DEPRECATION")
                 c.writeType = type
@@ -318,7 +344,7 @@ class BmsConnection(
 
     private fun onNotify(c: BluetoothGattCharacteristic, value: ByteArray) {
         if (c.uuid != BmsUuids.NOTIFY) return
-        Log.d(TAG, "RX ${value.toHex()}")
+        if (BuildConfig.DEBUG) Log.d(TAG, "RX ${Modbus.redactForLog(value)}")
         for (frame in assembler.feed(value)) frames.tryEmit(frame)
     }
 

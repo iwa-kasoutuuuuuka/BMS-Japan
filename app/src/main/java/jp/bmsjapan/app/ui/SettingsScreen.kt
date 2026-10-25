@@ -164,10 +164,11 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
             }
 
             Section(stringResource(R.string.group_battery_type)) {
+                // 見出しが「電池の種類」なので、行には種類の名前だけを出す（長い名前でも折り返さない）
                 SettingRow(
-                    label = stringResource(R.string.label_battery_type),
-                    value = s.batteryType?.let { stringResource(it.label) } ?: "--",
-                    caption = null,
+                    label = s.batteryType?.let { stringResource(it.label) } ?: "--",
+                    value = "",
+                    caption = stringResource(R.string.battery_type_tap),
                     enabled = !busy,
                     onClick = { choosingBattery = true },
                 )

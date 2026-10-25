@@ -11,3 +11,8 @@ build/
 *.aab
 *.keystore
 *.jks
+
+# 署名鍵（リポジトリの外に置くが念のため）
+*.jks
+*.keystore
+keystore.properties

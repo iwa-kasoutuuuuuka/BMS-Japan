@@ -125,7 +125,7 @@ class BmsClient:
                 w[1].set_result(frame)
             else:
                 self.unmatched_frames += 1
-                log.debug("unmatched frame: %s", frame)
+                log.debug("unmatched frame: %s", type(frame).__name__)
 
     async def transaction(self, frame: bytes, matches: Callable[[BmsFrame], bool]) -> BmsFrame:
         """フレームを送り、``matches`` に合う応答を待つ。応答が無ければ送り直す。"""
@@ -139,12 +139,12 @@ class BmsClient:
                 # 送信より先に待ち受けを始めるので、応答を取りこぼさない
                 self._waiter = (matches, fut)
                 try:
-                    log.debug("TX %s", mb.to_hex(frame))
+                    log.debug("TX %s", mb.redact_for_log(frame))
                     await self.transport.write(frame)
                     return await asyncio.wait_for(fut, self.reply_timeout)
                 except asyncio.TimeoutError:
-                    log.warning("no reply for %s (attempt %d)", mb.to_hex(frame), attempt + 1)
-                    last = BmsTimeoutError(f"no reply for {mb.to_hex(frame)}")
+                    log.warning("no reply for %s (attempt %d)", mb.redact_for_log(frame), attempt + 1)
+                    last = BmsTimeoutError(f"no reply (function 0x{frame[1]:02X})")
                 finally:
                     self._waiter = None
             raise last or BmsTimeoutError("no reply")

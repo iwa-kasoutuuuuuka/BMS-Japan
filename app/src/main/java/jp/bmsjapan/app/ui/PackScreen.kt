@@ -41,6 +41,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -87,6 +95,7 @@ fun PackScreen(vm: BmsViewModel) {
                             Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.action_add_unit))
                         }
                     }
+                    ThemeMenuButton(vm)
                 },
             )
         },
@@ -98,7 +107,7 @@ fun PackScreen(vm: BmsViewModel) {
         ) {
             item { PackSummaryCard(pack, mode, statuses.size) }
             item {
-                Text(stringResource(R.string.pack_units), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Box(Modifier.padding(top = 8.dp, start = 4.dp)) { SectionTitle(stringResource(R.string.pack_units)) }
             }
             items(statuses, key = { it.address }) { s ->
                 UnitCard(
@@ -139,8 +148,14 @@ fun PackScreen(vm: BmsViewModel) {
 
 @Composable
 private fun PackSummaryCard(p: PackSummary?, mode: PackMode, unitCount: Int) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
+    val colors = LocalBmsColors.current
+    BmsCard {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 20.dp, horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             if (p == null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -148,74 +163,65 @@ private fun PackSummaryCard(p: PackSummary?, mode: PackMode, unitCount: Int) {
                 }
                 return@Column
             }
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("%.1f".format(p.soc), fontSize = 44.sp, fontWeight = FontWeight.Bold)
-                Text(" %", fontSize = 22.sp, modifier = Modifier.padding(bottom = 8.dp))
-                Spacer(Modifier.weight(1f))
-                Text(
-                    stringResource(
-                        when (p.state) {
-                            PackState.CHARGING -> R.string.state_charging
-                            PackState.DISCHARGING -> R.string.state_discharging
-                            PackState.IDLE -> R.string.state_idle
-                            PackState.MIXED -> R.string.state_mixed
-                        },
-                    ),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 10.dp),
-                )
-            }
-            LinearProgressIndicator(
-                progress = { (p.soc / 100.0).toFloat().coerceIn(0f, 1f) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(10.dp),
+            SocGauge(
+                soc = p.soc,
+                subtitle = stringResource(R.string.gauge_remaining, "%.1f".format(p.remainingAh)),
             )
+            Spacer(Modifier.height(4.dp))
+            StateChip(packStateLabel(p.state), packStateColor(p.state))
             Text(
                 stringResource(if (mode == PackMode.SERIES) R.string.pack_soc_note_series else R.string.pack_soc_note_parallel),
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
+                modifier = Modifier.padding(top = 8.dp),
             )
             if (p.unitCount < unitCount) {
                 Text(
                     stringResource(R.string.pack_partial, p.unitCount, unitCount),
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            Spacer(Modifier.height(12.dp))
-            Grid(
+            Spacer(Modifier.height(16.dp))
+            MetricTiles(
                 listOf(
-                    stringResource(R.string.label_total_voltage) to "%.1f V".format(p.voltage),
-                    stringResource(R.string.label_current) to "%.1f A".format(p.current),
-                    stringResource(R.string.label_power) to "%.3f kW".format(p.powerKw),
-                    stringResource(R.string.label_remaining) to "%.1f Ah".format(p.remainingAh),
-                    stringResource(R.string.pack_cell_range) to "%.3f〜%.3f V".format(p.minCellVoltage, p.maxCellVoltage),
-                    stringResource(R.string.label_cell_delta) to "%.0f mV".format(p.cellVoltageDelta * 1000),
-                    stringResource(R.string.pack_temp_range) to "${p.minTemperature}〜${p.maxTemperature} ℃",
-                    stringResource(R.string.section_alarms) to
-                        if (p.alarmCount == 0) stringResource(R.string.no_alarms) else stringResource(R.string.pack_alarm_units, p.alarmCount),
+                    Metric(stringResource(R.string.label_total_voltage), "%.1f".format(p.voltage), "V", colors.gaugeStart),
+                    Metric(stringResource(R.string.label_current), "%.1f".format(p.current), "A", packStateColor(p.state)),
+                    Metric(stringResource(R.string.label_power), "%.3f".format(p.powerKw), "kW", colors.mixed),
+                    Metric(stringResource(R.string.label_cell_delta), "%.0f".format(p.cellVoltageDelta * 1000), "mV",
+                        if (p.cellVoltageDelta >= 0.05) colors.discharge else colors.good),
+                    Metric(stringResource(R.string.pack_cell_range), "%.3f〜%.3f".format(p.minCellVoltage, p.maxCellVoltage), "V"),
+                    Metric(stringResource(R.string.pack_temp_range), "${p.minTemperature}〜${p.maxTemperature}", "℃"),
                 ),
             )
+            Spacer(Modifier.height(12.dp))
+            if (p.alarmCount == 0) {
+                StateChip(stringResource(R.string.no_alarms), colors.good)
+            } else {
+                StateChip(stringResource(R.string.pack_alarm_units, p.alarmCount), MaterialTheme.colorScheme.error)
+            }
         }
     }
 }
 
 @Composable
-private fun Grid(items: List<Pair<String, String>>) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items.chunked(2).forEach { row ->
-            Row(Modifier.fillMaxWidth()) {
-                row.forEach { (label, value) ->
-                    Column(Modifier.weight(1f)) {
-                        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(value, style = MaterialTheme.typography.titleSmall)
-                    }
-                }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
-            }
-        }
+private fun packStateLabel(s: PackState): String = stringResource(
+    when (s) {
+        PackState.CHARGING -> R.string.state_charging
+        PackState.DISCHARGING -> R.string.state_discharging
+        PackState.IDLE -> R.string.state_idle
+        PackState.MIXED -> R.string.state_mixed
+    },
+)
+
+@Composable
+private fun packStateColor(s: PackState): Color {
+    val c = LocalBmsColors.current
+    return when (s) {
+        PackState.CHARGING -> c.charge
+        PackState.DISCHARGING -> c.discharge
+        PackState.IDLE -> c.idle
+        PackState.MIXED -> c.mixed
     }
 }
 
@@ -230,22 +236,26 @@ private fun UnitCard(
 ) {
     val live = status.live
     val alarm = live?.alarms?.isNotEmpty() == true
-    Card(
-        Modifier
-            .fillMaxWidth()
-            .clickable(enabled = status.state == ConnectionState.CONNECTED && live != null, onClick = onOpen),
-        colors = CardDefaults.cardColors(
-            containerColor = if (alarm) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant,
-        ),
+    val colors = LocalBmsColors.current
+    BmsCard(
+        Modifier.clickable(enabled = status.state == ConnectionState.CONNECTED && live != null, onClick = onOpen),
     ) {
-        Row(Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(status.name, fontWeight = FontWeight.Bold, maxLines = 1)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(status.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, modifier = Modifier.weight(1f, fill = false))
+                    if (live != null) {
+                        Spacer(Modifier.width(8.dp))
+                        StateChip(stateLabel(live.state), stateColor(live.state))
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
                 when {
                     reconnectAttempt != null && (status.state != ConnectionState.CONNECTED || live == null) -> {
                         Text(
                             stringResource(R.string.reconnecting_short, reconnectAttempt, BmsViewModel.MAX_RECONNECT_ATTEMPTS),
                             style = MaterialTheme.typography.bodySmall,
+                            color = colors.discharge,
                         )
                         TextButton(onClick = onStopReconnect) { Text(stringResource(R.string.action_stop_reconnect)) }
                     }
@@ -259,22 +269,32 @@ private fun UnitCard(
                     }
                     live == null -> Text(stringResource(R.string.status_connecting), style = MaterialTheme.typography.bodySmall)
                     else -> {
+                        // SOC の細いバー
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(colors.gaugeTrack),
+                        ) {
+                            Box(
+                                Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth((live.soc / 100.0).toFloat().coerceIn(0f, 1f))
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(Brush.horizontalGradient(listOf(colors.gaugeStart, colors.gaugeEnd))),
+                            )
+                        }
+                        Spacer(Modifier.height(6.dp))
                         Text(
                             stringResource(
-                                R.string.unit_line,
+                                R.string.unit_line_short,
                                 "%.1f".format(live.soc),
                                 "%.1f".format(live.totalVoltage),
                                 "%.1f".format(abs(live.current)),
-                                stringResource(
-                                    when (live.state) {
-                                        ChargeState.CHARGING -> R.string.state_charging
-                                        ChargeState.DISCHARGING -> R.string.state_discharging
-                                        ChargeState.IDLE -> R.string.state_idle
-                                        ChargeState.UNKNOWN -> R.string.state_unknown
-                                    },
-                                ),
                             ),
                             style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         if (alarm) {
                             Text(
@@ -287,7 +307,7 @@ private fun UnitCard(
                 }
             }
             IconButton(onClick = onRemove) {
-                Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_remove_unit))
+                Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_remove_unit), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
