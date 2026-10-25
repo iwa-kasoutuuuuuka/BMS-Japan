@@ -14,8 +14,11 @@ data class FoundDevice(
     val address: String,
     val name: String?,
     val rssi: Int,
+    /** 広告データに "JHB" が入っているか */
+    val advHasJhb: Boolean = false,
 ) {
-    val looksLikeBms: Boolean get() = name?.contains(BmsUuids.NAME_HINT, ignoreCase = true) == true
+    /** 元アプリと同じ判定: 名前に "JHB" を含む、または広告データに "JHB" が入っている */
+    val looksLikeBms: Boolean get() = advHasJhb || name?.contains(BmsUuids.NAME_HINT, ignoreCase = true) == true
 }
 
 class BmsScanner(context: Context) {
@@ -38,6 +41,7 @@ class BmsScanner(context: Context) {
                         address = result.device.address,
                         name = result.scanRecord?.deviceName ?: result.device.name,
                         rssi = result.rssi,
+                        advHasJhb = BmsUuids.advContainsJhb(result.scanRecord?.bytes),
                     ),
                 )
             }

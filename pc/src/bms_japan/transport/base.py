@@ -15,11 +15,20 @@ class FoundDevice:
     address: str
     name: str | None
     rssi: int | None
+    #: 広告データ（メーカー固有データ）に "JHB" が入っているか
+    adv_has_jhb: bool = False
 
     @property
     def looks_like_bms(self) -> bool:
-        """元アプリは名前に "JHB" を含む機器だけを一覧に出していた"""
-        return self.name is not None and "JHB" in self.name.upper()
+        """元アプリと同じ判定: 名前に "JHB" を含む、または広告データに "JHB"（4A 48 42）が入っている。
+        実機では名前が "LEAF_005" などで、メーカー固有データの末尾が 4A4842 の機種がある。"""
+        return self.adv_has_jhb or (self.name is not None and "JHB" in self.name.upper())
+
+
+def adv_contains_jhb(manufacturer_data: dict[int, bytes], service_data: dict[str, bytes] | None = None) -> bool:
+    """広告データのどこかに "JHB" のバイト列があるか"""
+    blobs = list(manufacturer_data.values()) + list((service_data or {}).values())
+    return any(b"JHB" in bytes(b) for b in blobs)
 
 
 class Transport(ABC):

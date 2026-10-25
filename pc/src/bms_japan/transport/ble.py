@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from .base import DataCallback, DisconnectCallback, FoundDevice, Transport
+from .base import DataCallback, DisconnectCallback, FoundDevice, Transport, adv_contains_jhb
 
 log = logging.getLogger(__name__)
 
@@ -26,14 +26,15 @@ CONNECT_TIMEOUT_S = 35.0
 
 
 async def scan(timeout: float = 8.0, include_all: bool = False) -> list[FoundDevice]:
-    """周囲の BLE 機器を探す。既定では名前に "JHB" を含む機器（元アプリと同じ条件）だけを返す。"""
+    """周囲の BLE 機器を探す。既定では BMS らしい機器（名前か広告データに "JHB"。元アプリと同じ条件）だけを返す。"""
     from bleak import BleakScanner
 
     found = await BleakScanner.discover(timeout=timeout, return_adv=True)
     out: list[FoundDevice] = []
     for address, (device, adv) in found.items():
         name = adv.local_name or device.name
-        out.append(FoundDevice(address=address, name=name, rssi=adv.rssi))
+        jhb = adv_contains_jhb(adv.manufacturer_data, adv.service_data)
+        out.append(FoundDevice(address=address, name=name, rssi=adv.rssi, adv_has_jhb=jhb))
     if not include_all:
         out = [d for d in out if d.looks_like_bms]
     out.sort(key=lambda d: (not d.looks_like_bms, -(d.rssi if d.rssi is not None else -999)))
