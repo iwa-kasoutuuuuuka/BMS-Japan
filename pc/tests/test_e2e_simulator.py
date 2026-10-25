@@ -345,3 +345,20 @@ async def test_recommended_unknown_preset(mgr):
     with pytest.raises(BmsJapanError) as e:
         await svc.set_recommended_preset(mgr, "tesla", address="DEMO-01")
     assert e.value.code == "unknown_preset"
+
+
+async def test_recommended_with_generation(mgr):
+    r = await svc.set_recommended_preset(
+        mgr, "leaf_standard", confirm=True, address="DEMO-01", accept_chemistry_change=True,
+        generation="ze1-40", soh=80,
+    )
+    assert r["verified"] and r["written"]["rated_capacity_ah"] == pytest.approx(90.1)
+    s = await svc.get_settings(mgr, "DEMO-01")
+    vals = {x["key"]: x["value"] for x in s["settings"]}
+    assert vals["cell_nominal"] == 3.65 and vals["rated_capacity"] == pytest.approx(90.1)
+    with pytest.raises(BmsJapanError) as e:
+        await svc.set_recommended_preset(mgr, "leaf_standard", address="DEMO-01", soh=80)
+    assert e.value.code == "generation_required"
+    with pytest.raises(BmsJapanError) as e:
+        await svc.set_recommended_preset(mgr, "leaf_standard", address="DEMO-01", generation="ze1_40", soh=150)
+    assert e.value.code == "invalid_value"

@@ -42,7 +42,7 @@ py -3.12 -m venv .venv
 | `bms-japan settings set KEY VALUE [--password P] [--yes]` | 設定値を 1 つ変更 |
 | `bms-japan switch charge\|discharge\|balance on\|off [--yes]` | 充電MOS・放電MOS・均等化の ON/OFF |
 | `bms-japan battery-type lfp\|ncm\|lto [--yes]` | 電池の種類（保護値がまとめて変わります） |
-| `bms-japan recommended leaf-standard\|leaf-long-life [--yes] [--accept-immediate-effect] [--accept-chemistry-change]` | おすすめ設定（日産リーフ）。保護値・温度・均等化・公称電圧がまとめて変わります（電流は変えません）。今のセル電圧・温度で書き込むとすぐ放電・充電が止まる場合は `--accept-immediate-effect`、電池の種類が変わる場合（例: リン酸鉄 → 三元系）はセルがリーフであることを確かめたうえで `--accept-chemistry-change` が無いと書き込みません |
+| `bms-japan recommended leaf-standard\|leaf-long-life [--yes] [--accept-immediate-effect] [--accept-chemistry-change]` | おすすめ設定（日産リーフ）。保護値・温度・均等化・公称電圧がまとめて変わります（電流は変えません）。今のセル電圧・温度で書き込むとすぐ放電・充電が止まる場合は `--accept-immediate-effect`、電池の種類が変わる場合（例: リン酸鉄 → 三元系）はセルがリーフであることを確かめたうえで `--accept-chemistry-change` が無いと書き込みません。`--generation ze0-24\|aze0-24\|aze0-30\|ze1-40\|ze1-62` で公称電圧を世代に合わせ、さらに `--soh 80`（と `--parallel 2`）で定格容量（セル容量 × 並列数 × SOH）も書き込みます |
 | `bms-japan password change [--old X --new Y] [--yes]` | パスワード変更（6 桁の数字） |
 | `bms-japan history [--page 0] [--pages 4] [--all]` | 故障履歴（1 ページ 7 件） |
 | `bms-japan capacity show` / `capacity set AH [--yes]` | 実容量（Ah） |

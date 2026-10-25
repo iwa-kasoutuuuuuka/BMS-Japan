@@ -68,6 +68,30 @@ class RecommendedTest {
         assertEquals(PresetImmediateEffect.NONE, long.immediateEffect(cond(3.7, 3.8, null, null)))
     }
 
+    @Test fun generationSetsNominalAndCapacity() {
+        // 40 kWh・2 並列・SOH 80% → 56.3 × 2 × 0.8 = 90.08 → 90.1 Ah
+        val ah = LeafGeneration.ratedCapacityAh(LeafGeneration.ZE1_40, 2, 80)
+        assertEquals(90.1, ah!!, 1e-9)
+        val plan = buildRecommendedPlan(
+            RecommendedPreset.LEAF_STANDARD, 7, lfp7(), PresetOptions(LeafGeneration.ZE1_40, ah),
+        )!!
+        assertEquals(listOf(164 to 15, 129 to 3650, 128 to 901), plan.extra)
+        assertEquals(listOf(164, 129, 128, 137), plan.steps.map { it.start })
+        assertTrue(plan.changes.any { it.setting == Setting.RATED_CAPACITY })
+        // 24 kWh 初期型は公称 3.75 V、容量は指定しなければ書かない
+        val gen1 = buildRecommendedPlan(RecommendedPreset.LEAF_LONG_LIFE, 7, lfp7(), PresetOptions(LeafGeneration.ZE0_24))!!
+        assertEquals(listOf(164 to 15, 129 to 3750), gen1.extra)
+    }
+
+    @Test fun capacityInputIsChecked() {
+        assertNull(LeafGeneration.ratedCapacityAh(LeafGeneration.ZE1_40, 0, 80))
+        assertNull(LeafGeneration.ratedCapacityAh(LeafGeneration.ZE1_40, 2, 101))
+        assertNull(LeafGeneration.ratedCapacityAh(LeafGeneration.ZE1_40, 2, 10))
+        // 定格容量の範囲（1〜2000 Ah）を外れる値は書かない
+        assertNull(buildRecommendedPlan(RecommendedPreset.LEAF_STANDARD, 7, lfp7(), PresetOptions(LeafGeneration.ZE1_40, 5000.0)))
+        assertNull(buildRecommendedPlan(RecommendedPreset.LEAF_STANDARD, 7, lfp7(), PresetOptions(LeafGeneration.ZE1_40, Double.NaN)))
+    }
+
     @Test fun chemistryChangeAndWriteOrder() {
         val plan = buildRecommendedPlan(RecommendedPreset.LEAF_STANDARD, 7, lfp7())!!
         assertTrue(plan.changesChemistry)

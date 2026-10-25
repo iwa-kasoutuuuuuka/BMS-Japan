@@ -27,6 +27,7 @@ import jp.bmsjapan.app.protocol.WriteStep
 import jp.bmsjapan.app.protocol.buildBatteryPresetSteps
 import jp.bmsjapan.app.protocol.immediateEffect
 import jp.bmsjapan.app.protocol.planBulk
+import jp.bmsjapan.app.protocol.PresetOptions
 import jp.bmsjapan.app.protocol.PresetPlan
 import jp.bmsjapan.app.protocol.RecommendedPreset
 import jp.bmsjapan.app.protocol.SafetyLimits
@@ -585,10 +586,10 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** おすすめ設定の書き込み内容（画面での確認用）。セル数や設定が読めていなければ null */
-    fun planRecommended(preset: RecommendedPreset): PresetPlan? {
+    fun planRecommended(preset: RecommendedPreset, options: PresetOptions = PresetOptions()): PresetPlan? {
         val s = _settings.value ?: return null
         val cells = presetCellCount() ?: return null
-        return buildRecommendedPlan(preset, cells, s)
+        return buildRecommendedPlan(preset, cells, s, options)
     }
 
     /**
@@ -596,7 +597,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
      * （間に設定が変わっていたら書かない）。書き込み直後に保護が働くか・電池の種類が変わるかも、ここでもう一度確かめる。
      */
     fun applyRecommended(preset: RecommendedPreset, shown: PresetPlan, acceptImmediateEffect: Boolean, acceptChemistryChange: Boolean) {
-        val plan = planRecommended(preset)
+        val plan = planRecommended(preset, shown.options)
         val effect = plan?.immediateEffect(CellConditions.of(live.value))
         if (plan == null || plan != shown ||
             (effect != PresetImmediateEffect.NONE && !acceptImmediateEffect) ||

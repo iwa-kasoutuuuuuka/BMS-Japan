@@ -287,6 +287,7 @@ async def _dispatch(mgr: ConnectionManager, args: argparse.Namespace) -> int:
                 mgr, args.preset, pw, ok, address,
                 accept_immediate_effect=args.accept_immediate_effect,
                 accept_chemistry_change=args.accept_chemistry_change,
+                generation=args.generation, parallel=args.parallel, soh=args.soh,
             ),
         )
 
@@ -371,6 +372,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="電池の種類が変わる（例: リン酸鉄→三元系）場合に、セルがリーフであることを確認したうえで書き込む",
     )
+    s.add_argument(
+        "--generation",
+        choices=["ze0-24", "aze0-24", "aze0-30", "ze1-40", "ze1-62"],
+        help="リーフの世代（公称電圧を合わせる）: ze0-24=24kWh 2010-2013 / aze0-24=24kWh 2013-2017 / aze0-30=30kWh / ze1-40=40kWh / ze1-62=62kWh",
+    )
+    s.add_argument("--parallel", type=int, help="1 直列あたりの並列セル数（省略時は車両と同じ）")
+    s.add_argument("--soh", type=int, help="残り容量の割合（%%、30〜100）。指定すると定格容量も書き込む（--generation が必要）")
 
     s = sub.add_parser("password", help="BMS のパスワードを変更する")
     sp = s.add_subparsers(dest="password_cmd", required=True, metavar="change")

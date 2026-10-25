@@ -23,7 +23,11 @@ sealed interface BulkOp {
      * おすすめ設定（日産リーフなど）。
      * @param expectedType 開いている台の今の種類。これと違う種類の台は、確認した内容と違うので書かない
      */
-    data class Recommended(val preset: RecommendedPreset, val expectedType: BatteryType?) : BulkOp
+    data class Recommended(
+        val preset: RecommendedPreset,
+        val expectedType: BatteryType?,
+        val options: PresetOptions = PresetOptions(),
+    ) : BulkOp
 }
 
 /** 1 回の書き込み（start から values を連続で書く） */
@@ -106,7 +110,7 @@ fun planBulk(
     }
     is BulkOp.Recommended -> {
         val cells = SafetyLimits.presetCellCount(settings, liveCells)
-        val plan = cells?.let { buildRecommendedPlan(op.preset, it, settings) }
+        val plan = cells?.let { buildRecommendedPlan(op.preset, it, settings, op.options) }
         when {
             !presetRegistersPresent(settings) -> BulkPlan.Rejected(BulkSkip.READ_FAILED)
             settings.batteryType != op.expectedType -> BulkPlan.Rejected(BulkSkip.CHEMISTRY_MISMATCH)

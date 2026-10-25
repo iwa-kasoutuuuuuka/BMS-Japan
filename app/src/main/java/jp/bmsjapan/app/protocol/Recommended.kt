@@ -61,6 +61,54 @@ enum class RecommendedPreset(
     fun pack(cellV: Double, cells: Int): Double = cellV * cells
 }
 
+/**
+ * 日産リーフの電池の世代。世代で変わるのは、セルの公称電圧と容量（電圧の保護値はどの世代も同じでよい）。
+ * 容量は新品時のセル 1 本の目安。実際の定格容量は「セル容量 × 並列数 × SOH」で計算する。
+ */
+enum class LeafGeneration(
+    @param:StringRes val label: Int,
+    @param:StringRes val detail: Int,
+    /** セルの公称電圧（V） */
+    val nominal: Double,
+    /** 新品時のセル 1 本の容量（Ah、目安） */
+    val cellAh: Double,
+    /** 車両での並列数（モジュールをそのまま使うときの目安） */
+    val defaultParallel: Int,
+    /** 熱で劣化しやすく、「長寿命」をすすめる世代 */
+    val suggestLongLife: Boolean,
+) {
+    ZE0_24(R.string.gen_ze0_24, R.string.gen_ze0_24_detail, 3.75, 33.1, 2, true),
+    AZE0_24(R.string.gen_aze0_24, R.string.gen_aze0_24_detail, 3.75, 33.1, 2, false),
+    AZE0_30(R.string.gen_aze0_30, R.string.gen_aze0_30_detail, 3.70, 40.0, 2, false),
+    ZE1_40(R.string.gen_ze1_40, R.string.gen_ze1_40_detail, 3.65, 56.3, 2, false),
+    ZE1_62(R.string.gen_ze1_62, R.string.gen_ze1_62_detail, 3.65, 59.0, 3, false),
+    ;
+
+    companion object {
+        const val MIN_PARALLEL = 1
+        const val MAX_PARALLEL = 20
+        const val MIN_SOH = 30
+        const val MAX_SOH = 100
+
+        /**
+         * 定格容量の目安（Ah、0.1 単位）。並列数・SOH が範囲外なら null。
+         * @param sohPercent 残っている容量の割合（%）。中古のモジュールは劣化しているため
+         */
+        fun ratedCapacityAh(gen: LeafGeneration, parallel: Int, sohPercent: Int): Double? {
+            if (parallel !in MIN_PARALLEL..MAX_PARALLEL || sohPercent !in MIN_SOH..MAX_SOH) return null
+            return (gen.cellAh * parallel * sohPercent / 100.0 * 10).roundToInt() / 10.0
+        }
+    }
+}
+
+/** おすすめ設定の追加の指定（世代と定格容量）。どちらも省略できる */
+data class PresetOptions(
+    /** 世代。指定すると公称電圧を世代に合わせる（省略時はプリセットの 3.70 V） */
+    val generation: LeafGeneration? = null,
+    /** 定格容量（Ah）。指定したときだけ書き込む */
+    val ratedCapacityAh: Double? = null,
+)
+
 /** おすすめ設定で変わる 1 項目（表示用） */
 data class PresetChange(val setting: Setting?, @param:StringRes val label: Int, val before: String, val after: String)
 
@@ -73,6 +121,7 @@ data class PresetPlan(
     val preset: RecommendedPreset,
     /** 書き込み前の電池の種類（読めなければ null） */
     val fromType: BatteryType?,
+    val options: PresetOptions = PresetOptions(),
 ) {
     val balanceDiffRaw: Int get() = extra.first { it.first == 164 }.second
 
@@ -83,7 +132,8 @@ data class PresetPlan(
     val steps: List<WriteStep> get() = extra.map { (reg, v) -> WriteStep(reg, intArrayOf(v)) } + WriteStep(137, block)
 
     override fun equals(other: Any?) = other is PresetPlan && block.contentEquals(other.block) &&
-        extra == other.extra && changes == other.changes && preset == other.preset && fromType == other.fromType
+        extra == other.extra && changes == other.changes && preset == other.preset && fromType == other.fromType &&
+        options == other.options
     override fun hashCode() = block.contentHashCode() * 31 + extra.hashCode()
 }
 
@@ -141,7 +191,12 @@ fun PresetPlan.immediateEffect(c: CellConditions): PresetImmediateEffect {
  * セル数が 1〜48 でない、その種類が選べないセル数、今の値が揃っていない、のどれかなら null。
  * 作った値は、書き込み後の状態（電池の種類が変わった後）で安全範囲の確認を通ることを確かめてから返す。
  */
-fun buildRecommendedPlan(preset: RecommendedPreset, cellCount: Int, current: BmsSettings): PresetPlan? {
+fun buildRecommendedPlan(
+    preset: RecommendedPreset,
+    cellCount: Int,
+    current: BmsSettings,
+    options: PresetOptions = PresetOptions(),
+): PresetPlan? {
     if (cellCount !in MIN_PRESET_CELLS..MAX_PRESET_CELLS) return null
     if (!preset.type.availableFor(cellCount)) return null
     val start = 137
@@ -164,11 +219,18 @@ fun buildRecommendedPlan(preset: RecommendedPreset, cellCount: Int, current: Bms
     set(157, temp(preset.dischargeUtRelease)); set(158, temp(preset.dischargeUt))
     set(163, mv(preset.balanceStart))
     val diffRaw = mv(preset.balanceDiff)
-    val nominalRaw = mv(preset.nominal)
+    val nominalRaw = mv(options.generation?.nominal ?: preset.nominal)
+    val extra = mutableListOf(164 to diffRaw, 129 to nominalRaw)
+    options.ratedCapacityAh?.let { ah ->
+        if (!ah.isFinite()) return null
+        extra += Setting.RATED_CAPACITY.register to Setting.RATED_CAPACITY.encoding.encode(ah)
+    }
 
     // 書き込み後の状態を作り、主な項目が安全範囲・大小関係の確認を通るかを確かめる（通らなければ書かない）
-    val after = current.merge(start, values).merge(164, intArrayOf(diffRaw)).merge(129, intArrayOf(nominalRaw))
-    val checked = listOf(
+    var after = current.merge(start, values)
+    for ((reg, v) in extra) after = after.merge(reg, intArrayOf(v))
+    val checked = listOfNotNull(
+        Setting.RATED_CAPACITY.takeIf { options.ratedCapacityAh != null },
         Setting.CELL_NOMINAL,
         Setting.CELL_OV, Setting.CELL_UV, Setting.PACK_OV, Setting.PACK_UV,
         Setting.CHARGE_OT, Setting.CHARGE_UT, Setting.DISCHARGE_OT, Setting.DISCHARGE_UT,
@@ -198,5 +260,5 @@ fun buildRecommendedPlan(preset: RecommendedPreset, cellCount: Int, current: Bms
             changes += PresetChange(s, R.string.preset_release_of, rb?.let { "${s.format(it)} ${s.unit}" } ?: "--", "${s.format(ra)} ${s.unit}")
         }
     }
-    return PresetPlan(values, listOf(164 to diffRaw, 129 to nominalRaw), changes, preset, beforeType)
+    return PresetPlan(values, extra, changes, preset, beforeType, options)
 }

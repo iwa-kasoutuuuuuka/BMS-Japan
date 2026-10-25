@@ -26,7 +26,18 @@ from .labels import LIVE_LABELS, t
 from .protocol.history import HistoryRecord
 from .protocol.live import LiveData
 from .protocol.pack import PackMode, PackSummary
-from .protocol.recommended import CellConditions, RecommendedPreset, build_recommended_plan
+from .protocol.recommended import (
+    MAX_PARALLEL,
+    MAX_SOH,
+    MIN_PARALLEL,
+    MIN_SOH,
+    CellConditions,
+    LeafGeneration,
+    PresetOptions,
+    RecommendedPreset,
+    build_recommended_plan,
+    rated_capacity_ah,
+)
 from .protocol.settings import (
     SETTINGS,
     SETTINGS_BY_KEY,
@@ -683,8 +694,13 @@ async def set_recommended_preset(
     confirm_token: str | None = None,
     accept_immediate_effect: bool = False,
     accept_chemistry_change: bool = False,
+    generation: str | None = None,
+    parallel: int | None = None,
+    soh: int | None = None,
 ) -> dict[str, Any]:
-    """おすすめ設定（日産リーフなど）をまとめて書き込む。電流の保護値は変えない"""
+    """おすすめ設定（日産リーフなど）をまとめて書き込む。電流の保護値は変えない。
+    generation を指定すると公称電圧を世代に合わせる。さらに soh（%）を指定すると、
+    定格容量（セル容量 × 並列数 × SOH）も書き込む（parallel を省略すると車両の並列数）"""
     for name, flag in (("accept_immediate_effect", accept_immediate_effect), ("accept_chemistry_change", accept_chemistry_change)):
         if not isinstance(flag, bool):
             raise BmsJapanError("invalid_value", f"{name} は true / false で指定してください")
@@ -693,6 +709,25 @@ async def set_recommended_preset(
     except ValueError as e:
         names = " / ".join(p.name.lower() for p in RecommendedPreset)
         raise BmsJapanError("unknown_preset", f"不明なおすすめ設定です: {preset}（{names}）") from e
+    gen = None
+    if generation is not None:
+        try:
+            gen = LeafGeneration.from_name(generation)
+        except ValueError as e:
+            names = " / ".join(g.name.lower() for g in LeafGeneration)
+            raise BmsJapanError("unknown_generation", f"不明な世代です: {generation}（{names}）") from e
+    capacity = None
+    if soh is not None or parallel is not None:
+        if gen is None:
+            raise BmsJapanError("generation_required", "定格容量を計算するには generation（世代）も指定してください")
+        par = gen.default_parallel if parallel is None else parallel
+        capacity = rated_capacity_ah(gen, par, soh if soh is not None else -1)
+        if capacity is None:
+            raise BmsJapanError(
+                "invalid_value",
+                f"並列数は {MIN_PARALLEL}〜{MAX_PARALLEL}、SOH は {MIN_SOH}〜{MAX_SOH}% の整数で指定してください",
+            )
+    options = PresetOptions(gen, capacity)
     c = await mgr.client(address)
     live = await _io(c.read_live())
     current = await _io(c.read_settings())
@@ -702,7 +737,7 @@ async def set_recommended_preset(
             "preset_unavailable",
             f"セル数（{n if n is not None else live.cell_count}）では {rp.v.label} は使えません（三元系は 20 セル以下）",
         )
-    plan = build_recommended_plan(rp, n, current)
+    plan = build_recommended_plan(rp, n, current, options)
     if plan is None:
         raise BmsJapanError("settings_incomplete", "今の設定値を読み切れなかった（または安全範囲の確認を通らなかった）ため、書き込みを中止しました")
     await _check_password(c, password)
@@ -743,6 +778,11 @@ async def set_recommended_preset(
         if plan.changes_chemistry
         else None,
         "chemistry_warning": chemistry_warning,
+        "generation": {"key": gen.name.lower(), "label": gen.label, "nominal_v": gen.nominal} if gen else None,
+        "rated_capacity_ah": capacity,
+        "generation_hint": "この世代は熱で劣化しやすいため leaf_long_life をすすめます"
+        if gen is not None and gen.suggest_long_life and rp is RecommendedPreset.LEAF_STANDARD
+        else None,
         "note": "電流の保護値はそのままです。普段の充電を止める電圧は、充電器・インバーター側でこれより低く（目安: セル 4.05〜4.10 V）設定してください",
     }
     if effect is not None and confirm and not accept_immediate_effect:

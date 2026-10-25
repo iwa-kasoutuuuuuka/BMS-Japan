@@ -83,6 +83,68 @@ class RecommendedPreset(Enum):
             raise ValueError(f"unknown preset: {name} ({', '.join(p.name.lower() for p in RecommendedPreset)})") from None
 
 
+class LeafGeneration(Enum):
+    """日産リーフの電池の世代（Android 版 LeafGeneration と同じ値）。
+    値 = (表示名, 公称電圧 V, 新品時のセル容量 Ah（目安）, 車両での並列数, 長寿命をすすめるか)"""
+
+    ZE0_24 = ("24 kWh 初期型（2010〜2013年）・マンガン系", 3.75, 33.1, 2, True)
+    AZE0_24 = ("24 kWh 改良型（2013〜2017年）・マンガン系", 3.75, 33.1, 2, False)
+    AZE0_30 = ("30 kWh（2015〜2017年）・マンガン系＋三元系", 3.70, 40.0, 2, False)
+    ZE1_40 = ("40 kWh（2017年〜）・三元系", 3.65, 56.3, 2, False)
+    ZE1_62 = ("62 kWh e+（2019年〜）・三元系", 3.65, 59.0, 3, False)
+
+    @property
+    def label(self) -> str:
+        return self.value[0]
+
+    @property
+    def nominal(self) -> float:
+        return self.value[1]
+
+    @property
+    def cell_ah(self) -> float:
+        return self.value[2]
+
+    @property
+    def default_parallel(self) -> int:
+        return self.value[3]
+
+    @property
+    def suggest_long_life(self) -> bool:
+        return self.value[4]
+
+    @staticmethod
+    def from_name(name: str) -> "LeafGeneration":
+        key = name.strip().upper().replace("-", "_")
+        try:
+            return LeafGeneration[key]
+        except KeyError:
+            raise ValueError(f"unknown generation: {name} ({', '.join(g.name.lower() for g in LeafGeneration)})") from None
+
+
+MIN_PARALLEL, MAX_PARALLEL = 1, 20
+MIN_SOH, MAX_SOH = 30, 100
+
+
+def rated_capacity_ah(gen: LeafGeneration, parallel: int, soh_percent: int) -> float | None:
+    """定格容量の目安（Ah、0.1 単位）＝ セル容量 × 並列数 × SOH。範囲外なら None"""
+    if isinstance(parallel, bool) or isinstance(soh_percent, bool):
+        return None
+    if not isinstance(parallel, int) or not isinstance(soh_percent, int):
+        return None
+    if not (MIN_PARALLEL <= parallel <= MAX_PARALLEL and MIN_SOH <= soh_percent <= MAX_SOH):
+        return None
+    return round_half_up(gen.cell_ah * parallel * soh_percent / 100 * 10) / 10
+
+
+@dataclass(frozen=True)
+class PresetOptions:
+    """おすすめ設定の追加の指定。generation で公称電圧を世代に合わせ、rated_capacity_ah を指定したときだけ定格容量も書く"""
+
+    generation: LeafGeneration | None = None
+    rated_capacity_ah: float | None = None
+
+
 #: 書き込み後に確かめる項目
 CHECKED_KEYS = [
     "cell_nominal", "cell_ov", "cell_uv", "pack_ov", "pack_uv",
@@ -120,6 +182,7 @@ class PresetPlan:
     changes: list[dict[str, Any]]
     preset: "RecommendedPreset"
     from_type: BatteryType | None
+    options: PresetOptions = PresetOptions()
 
     @property
     def changes_chemistry(self) -> bool:
@@ -149,7 +212,9 @@ class PresetPlan:
         return None
 
 
-def build_recommended_plan(preset: RecommendedPreset, cell_count: int, current: BmsSettings) -> PresetPlan | None:
+def build_recommended_plan(
+    preset: RecommendedPreset, cell_count: int, current: BmsSettings, options: PresetOptions = PresetOptions()
+) -> PresetPlan | None:
     """書き込み内容を作る。セル数・種類・今の値が揃わない、または安全範囲の確認を通らなければ None"""
     p = preset.v
     if not MIN_PRESET_CELLS <= cell_count <= MAX_PRESET_CELLS:
@@ -186,10 +251,21 @@ def build_recommended_plan(preset: RecommendedPreset, cell_count: int, current: 
     put(157, temp(p.discharge_ut_release)); put(158, temp(p.discharge_ut))  # fmt: skip
     put(163, mv(p.balance_start))
     diff_raw = mv(p.balance_diff)
-    nominal_raw = mv(p.nominal)
+    nominal_raw = mv(options.generation.nominal if options.generation else p.nominal)
+    extra: list[tuple[int, int]] = [(164, diff_raw), (129, nominal_raw)]
+    keys = list(CHECKED_KEYS)
+    if options.rated_capacity_ah is not None:
+        ah = options.rated_capacity_ah
+        if not isinstance(ah, (int, float)) or isinstance(ah, bool) or ah != ah or ah in (float("inf"), float("-inf")):
+            return None
+        rc = SETTINGS_BY_KEY["rated_capacity"]
+        extra.append((rc.register, rc.encoding.encode(float(ah))))
+        keys.insert(0, "rated_capacity")
 
-    after = current.merge(PRESET_START, values).merge(164, [diff_raw]).merge(129, [nominal_raw])
-    for key in CHECKED_KEYS:
+    after = current.merge(PRESET_START, values)
+    for reg, v in extra:
+        after = after.merge(reg, [v])
+    for key in keys:
         s = SETTINGS_BY_KEY[key]
         val = after.get(s)
         if val is None or not validate(s, val, after, cell_count).ok:
@@ -206,7 +282,7 @@ def build_recommended_plan(preset: RecommendedPreset, cell_count: int, current: 
     def fmt(s: Any, x: float | None) -> str | None:
         return None if x is None else f"{s.format(x)} {s.unit}"
 
-    for key in CHECKED_KEYS:
+    for key in keys:
         s = SETTINGS_BY_KEY[key]
         b, a = current.get(s), after.get(s)
         if fmt(s, b) != fmt(s, a):
@@ -214,4 +290,4 @@ def build_recommended_plan(preset: RecommendedPreset, cell_count: int, current: 
         rb, ra = current.release(s), after.release(s)
         if ra is not None and fmt(s, rb) != fmt(s, ra):
             changes.append({"key": key + "_release", "label": s.label + "（解除値）", "before": fmt(s, rb), "after": fmt(s, ra)})
-    return PresetPlan(values, [(164, diff_raw), (129, nominal_raw)], changes, preset, bt_before)
+    return PresetPlan(values, extra, changes, preset, bt_before, options)

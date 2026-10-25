@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
@@ -35,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -54,7 +56,9 @@ import jp.bmsjapan.app.protocol.CellConditions
 import jp.bmsjapan.app.protocol.BmsSettings
 import jp.bmsjapan.app.protocol.LiveData
 import jp.bmsjapan.app.protocol.PasswordChangeCheck
+import jp.bmsjapan.app.protocol.LeafGeneration
 import jp.bmsjapan.app.protocol.PresetImmediateEffect
+import jp.bmsjapan.app.protocol.PresetOptions
 import jp.bmsjapan.app.protocol.PresetPlan
 import jp.bmsjapan.app.protocol.RecommendedPreset
 import jp.bmsjapan.app.protocol.immediateEffect
@@ -303,6 +307,7 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
         RecommendedDialog(
             cellCount = vm.presetCellCount() ?: live.cellCount,
             live = live,
+            currentRatedAh = s[Setting.RATED_CAPACITY],
             bulkCount = bulkCount,
             allLives = { vm.connectedLives },
             plan = vm::planRecommended,
@@ -310,7 +315,11 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
             onConfirm = { preset, plan, toAll, ack, chemAck ->
                 choosingRecommended = false
                 if (toAll && bulkCount > 1) {
-                    vm.runBulk(BulkOp.Recommended(preset, s.batteryType), acceptImmediateEffect = ack, acceptChemistryChange = chemAck)
+                    vm.runBulk(
+                        BulkOp.Recommended(preset, s.batteryType, plan.options),
+                        acceptImmediateEffect = ack,
+                        acceptChemistryChange = chemAck,
+                    )
                 } else {
                     vm.applyRecommended(preset, plan, ack, chemAck)
                 }
@@ -593,137 +602,264 @@ private fun BatteryTypeDialog(
     )
 }
 
-/** おすすめ設定: 電池を選ぶ → 変わる項目を確認 → 書き込む */
+/** おすすめ設定: 電池を選ぶ → 世代と容量 → 変わる項目を確認 → 書き込む */
 @Composable
 private fun RecommendedDialog(
     cellCount: Int,
     live: LiveData,
+    currentRatedAh: Double?,
     bulkCount: Int,
     allLives: () -> List<LiveData>,
-    plan: (RecommendedPreset) -> PresetPlan?,
+    plan: (RecommendedPreset, PresetOptions) -> PresetPlan?,
     onDismiss: () -> Unit,
     onConfirm: (RecommendedPreset, PresetPlan, toAll: Boolean, acknowledged: Boolean, chemistryAcknowledged: Boolean) -> Unit,
 ) {
+    // 0: 電池を選ぶ / 1: 世代と容量 / 2: 変わる項目の確認
+    var step by remember { mutableIntStateOf(0) }
     var selected by remember { mutableStateOf<RecommendedPreset?>(null) }
-    var reviewing by remember { mutableStateOf(false) }
+    var generation by remember { mutableStateOf<LeafGeneration?>(null) }
+    var writeCapacity by remember { mutableStateOf(false) }
+    var parallelText by remember { mutableStateOf("") }
+    var sohText by remember { mutableStateOf("100") }
     var acknowledged by remember { mutableStateOf(false) }
     var toAll by remember { mutableStateOf(false) }
     var chemistryAcknowledged by remember { mutableStateOf(false) }
+
     val current = selected
-    val p = if (reviewing && current != null) plan(current) else null
+    val gen = generation
+    val ratedAh = if (writeCapacity && gen != null) {
+        val par = parallelText.trim().toIntOrNull()
+        val soh = sohText.trim().toIntOrNull()
+        if (par != null && soh != null) LeafGeneration.ratedCapacityAh(gen, par, soh) else null
+    } else null
+    // 容量を書くと決めたのに、並列数・SOH が正しくない
+    val capacityInvalid = writeCapacity && gen != null && ratedAh == null
+    val options = PresetOptions(gen, ratedAh)
+    val p = if (step == 2 && current != null) plan(current, options) else null
     // 全台に書くときは、全台のうちいちばん厳しいセル電圧・温度で判定する
     val cond = if (toAll) CellConditions.worst(allLives()) else CellConditions.of(live)
     val effect = p?.immediateEffect(cond) ?: PresetImmediateEffect.NONE
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(if (current != null && reviewing) current.label else R.string.label_recommended)) },
+        title = {
+            Text(
+                when {
+                    step == 1 -> stringResource(R.string.gen_title)
+                    step == 2 && current != null -> stringResource(current.label)
+                    else -> stringResource(R.string.label_recommended)
+                },
+            )
+        },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                if (!reviewing || current == null) {
-                    Text(stringResource(R.string.recommended_choose, cellCount), style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(4.dp))
-                    RecommendedPreset.entries.forEach { preset ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .selectable(selected = selected == preset, onClick = { selected = preset })
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(selected = selected == preset, onClick = { selected = preset })
-                            Column {
-                                Text(stringResource(preset.label))
-                                Text(stringResource(preset.description), style = MaterialTheme.typography.bodySmall)
+            // 画面（step）が変わったら先頭から表示する
+            val scroll = remember(step) { ScrollState(0) }
+            Column(Modifier.verticalScroll(scroll)) {
+                when {
+                    step == 0 || current == null -> {
+                        Text(stringResource(R.string.recommended_choose, cellCount), style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(4.dp))
+                        RecommendedPreset.entries.forEach { preset ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .selectable(selected = selected == preset, onClick = { selected = preset })
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = selected == preset, onClick = { selected = preset })
+                                Column {
+                                    Text(stringResource(preset.label))
+                                    Text(stringResource(preset.description), style = MaterialTheme.typography.bodySmall)
+                                }
                             }
                         }
                     }
-                } else if (p == null) {
-                    Text(stringResource(R.string.recommended_unavailable, cellCount), color = MaterialTheme.colorScheme.error)
-                } else {
-                    Text(stringResource(R.string.recommended_changes), style = MaterialTheme.typography.titleSmall)
-                    Spacer(Modifier.height(4.dp))
-                    if (p.changes.isEmpty()) Text(stringResource(R.string.recommended_no_changes))
-                    p.changes.forEach { ch ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp),
-                        ) {
-                            Text(stringResource(ch.label), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                            Text("${ch.before} → ${ch.after}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                    step == 1 -> {
+                        Text(stringResource(R.string.gen_intro), style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(4.dp))
+                        val choices: List<LeafGeneration?> = listOf(null) + LeafGeneration.entries
+                        choices.forEach { g ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .selectable(selected = generation == g, onClick = {
+                                        generation = g
+                                        if (g != null) parallelText = g.defaultParallel.toString() else writeCapacity = false
+                                    })
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = generation == g, onClick = null)
+                                Column {
+                                    Text(if (g == null) stringResource(R.string.gen_none) else stringResource(g.label))
+                                    Text(
+                                        if (g == null) stringResource(R.string.gen_none_detail) else stringResource(g.detail),
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            }
+                        }
+                        if (gen != null && gen.suggestLongLife && current == RecommendedPreset.LEAF_STANDARD) {
+                            Text(
+                                stringResource(R.string.gen_suggest_long_life),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        if (gen != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { writeCapacity = !writeCapacity },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(checked = writeCapacity, onCheckedChange = { writeCapacity = it })
+                                Text(stringResource(R.string.gen_write_capacity), style = MaterialTheme.typography.bodyMedium)
+                            }
+                            if (writeCapacity) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedTextField(
+                                        value = parallelText,
+                                        onValueChange = { v -> parallelText = v.filter(Char::isDigit).take(2) },
+                                        label = { Text(stringResource(R.string.gen_parallel)) },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    )
+                                    OutlinedTextField(
+                                        value = sohText,
+                                        onValueChange = { v -> sohText = v.filter(Char::isDigit).take(3) },
+                                        label = { Text(stringResource(R.string.gen_soh)) },
+                                        suffix = { Text("%") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    )
+                                }
+                                Text(
+                                    if (ratedAh != null) {
+                                        stringResource(
+                                            R.string.gen_capacity_result,
+                                            "%.1f".format(gen.cellAh), parallelText, sohText, "%.1f".format(ratedAh),
+                                        )
+                                    } else {
+                                        stringResource(
+                                            R.string.gen_capacity_invalid,
+                                            LeafGeneration.MIN_PARALLEL, LeafGeneration.MAX_PARALLEL,
+                                            LeafGeneration.MIN_SOH, LeafGeneration.MAX_SOH,
+                                        )
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (ratedAh == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                )
+                                currentRatedAh?.let {
+                                    Text(stringResource(R.string.gen_capacity_current, "%.1f".format(it)), style = MaterialTheme.typography.bodySmall)
+                                }
+                                Text(
+                                    stringResource(R.string.gen_capacity_note),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Text(stringResource(R.string.recommended_note), style = MaterialTheme.typography.bodySmall)
-                    if (bulkCount > 1) {
-                        ApplyToAllRow(bulkCount, toAll) { toAll = it; acknowledged = false }
+                    p == null -> {
+                        Text(stringResource(R.string.recommended_unavailable, cellCount), color = MaterialTheme.colorScheme.error)
                     }
-                    if (p.changesChemistry) {
-                        // 電池の種類が変わると、過充電の保護値が大きく変わる。セルの種類を利用者に確かめてもらう
+                    else -> {
+                        Text(stringResource(R.string.recommended_changes), style = MaterialTheme.typography.titleSmall)
+                        Spacer(Modifier.height(4.dp))
+                        if (p.changes.isEmpty()) Text(stringResource(R.string.recommended_no_changes))
+                        p.changes.forEach { ch ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp),
+                            ) {
+                                Text(stringResource(ch.label), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                Text("${ch.before} → ${ch.after}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                            }
+                        }
                         Spacer(Modifier.height(8.dp))
-                        Text(
-                            stringResource(
-                                R.string.recommended_chem_warn,
-                                p.fromType?.let { stringResource(it.label) } ?: "--",
-                                stringResource(p.preset.type.label),
-                                "%.2f".format(p.preset.cellOv),
-                            ),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        if (toAll && bulkCount > 1) {
-                            Text(stringResource(R.string.recommended_chem_bulk_note), style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(R.string.recommended_note), style = MaterialTheme.typography.bodySmall)
+                        if (bulkCount > 1) {
+                            ApplyToAllRow(bulkCount, toAll) { toAll = it; acknowledged = false }
+                            if (toAll && p.options.ratedCapacityAh != null) {
+                                Text(stringResource(R.string.gen_bulk_capacity_note), style = MaterialTheme.typography.bodySmall)
+                            }
                         }
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { chemistryAcknowledged = !chemistryAcknowledged },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Checkbox(checked = chemistryAcknowledged, onCheckedChange = { chemistryAcknowledged = it })
-                            Text(stringResource(R.string.recommended_chem_ack), style = MaterialTheme.typography.bodySmall)
+                        if (p.changesChemistry) {
+                            // 電池の種類が変わると、過充電の保護値が大きく変わる。セルの種類を利用者に確かめてもらう
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                stringResource(
+                                    R.string.recommended_chem_warn,
+                                    p.fromType?.let { stringResource(it.label) } ?: "--",
+                                    stringResource(p.preset.type.label),
+                                    "%.2f".format(p.preset.cellOv),
+                                ),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            if (toAll && bulkCount > 1) {
+                                Text(stringResource(R.string.recommended_chem_bulk_note), style = MaterialTheme.typography.bodySmall)
+                            }
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { chemistryAcknowledged = !chemistryAcknowledged },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(checked = chemistryAcknowledged, onCheckedChange = { chemistryAcknowledged = it })
+                                Text(stringResource(R.string.recommended_chem_ack), style = MaterialTheme.typography.bodySmall)
+                            }
                         }
-                    }
-                    if (effect != PresetImmediateEffect.NONE) {
-                        val pr = p.preset
-                        val temps = "${cond.minTemp ?: "--"}〜${cond.maxTemp ?: "--"}"
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            when (effect) {
-                                PresetImmediateEffect.DISCHARGE_STOPS -> stringResource(
-                                    R.string.recommended_warn_discharge, "%.3f".format(cond.minCellV ?: 0.0), "%.2f".format(pr.cellUvRelease),
-                                )
-                                PresetImmediateEffect.CHARGE_STOPS -> stringResource(
-                                    R.string.recommended_warn_charge, "%.3f".format(cond.maxCellV ?: 0.0), "%.2f".format(pr.cellOvRelease),
-                                )
-                                PresetImmediateEffect.DISCHARGE_STOPS_TEMP -> stringResource(
-                                    R.string.recommended_warn_discharge_temp, temps, pr.dischargeUtRelease, pr.dischargeOtRelease,
-                                )
-                                else -> stringResource(R.string.recommended_warn_charge_temp, temps, pr.chargeUtRelease, pr.chargeOtRelease)
-                            },
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { acknowledged = !acknowledged },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Checkbox(checked = acknowledged, onCheckedChange = { acknowledged = it })
-                            Text(stringResource(R.string.recommended_ack), style = MaterialTheme.typography.bodySmall)
+                        if (effect != PresetImmediateEffect.NONE) {
+                            val pr = p.preset
+                            val temps = "${cond.minTemp ?: "--"}〜${cond.maxTemp ?: "--"}"
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                when (effect) {
+                                    PresetImmediateEffect.DISCHARGE_STOPS -> stringResource(
+                                        R.string.recommended_warn_discharge, "%.3f".format(cond.minCellV ?: 0.0), "%.2f".format(pr.cellUvRelease),
+                                    )
+                                    PresetImmediateEffect.CHARGE_STOPS -> stringResource(
+                                        R.string.recommended_warn_charge, "%.3f".format(cond.maxCellV ?: 0.0), "%.2f".format(pr.cellOvRelease),
+                                    )
+                                    PresetImmediateEffect.DISCHARGE_STOPS_TEMP -> stringResource(
+                                        R.string.recommended_warn_discharge_temp, temps, pr.dischargeUtRelease, pr.dischargeOtRelease,
+                                    )
+                                    else -> stringResource(R.string.recommended_warn_charge_temp, temps, pr.chargeUtRelease, pr.chargeOtRelease)
+                                },
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { acknowledged = !acknowledged },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(checked = acknowledged, onCheckedChange = { acknowledged = it })
+                                Text(stringResource(R.string.recommended_ack), style = MaterialTheme.typography.bodySmall)
+                            }
                         }
                     }
                 }
             }
         },
         confirmButton = {
-            if (!reviewing || current == null) {
-                TextButton(enabled = current != null, onClick = { reviewing = true; acknowledged = false; chemistryAcknowledged = false }) {
+            when {
+                step == 0 || current == null -> TextButton(enabled = current != null, onClick = { step = 1 }) {
                     Text(stringResource(R.string.action_next))
                 }
-            } else {
-                TextButton(
+                step == 1 -> TextButton(
+                    enabled = !capacityInvalid,
+                    onClick = { step = 2; acknowledged = false; chemistryAcknowledged = false },
+                ) { Text(stringResource(R.string.action_next)) }
+                else -> TextButton(
                     // 全台に書くときは、開いている台で変化が無くても他の台が違うことがあるので押せるようにする
                     enabled = p != null && (p.changes.isNotEmpty() || toAll) &&
                         (effect == PresetImmediateEffect.NONE || acknowledged) &&
@@ -733,8 +869,8 @@ private fun RecommendedDialog(
             }
         },
         dismissButton = {
-            if (reviewing) {
-                TextButton(onClick = { reviewing = false }) { Text(stringResource(R.string.action_back)) }
+            if (step > 0) {
+                TextButton(onClick = { step -= 1 }) { Text(stringResource(R.string.action_back)) }
             } else {
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
             }

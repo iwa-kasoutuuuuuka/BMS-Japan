@@ -82,3 +82,26 @@ def test_refuses_bad_input():
     assert build_recommended_plan(RecommendedPreset.LEAF_STANDARD, 0, lfp()) is None
     assert build_recommended_plan(RecommendedPreset.LEAF_STANDARD, 21, lfp(21)) is None
     assert build_recommended_plan(RecommendedPreset.LEAF_STANDARD, 7, EMPTY_SETTINGS) is None
+
+
+def test_generation_sets_nominal_and_capacity():
+    from bms_japan.protocol.recommended import LeafGeneration, PresetOptions, rated_capacity_ah
+
+    ah = rated_capacity_ah(LeafGeneration.ZE1_40, 2, 80)
+    assert ah == 90.1  # 56.3 × 2 × 0.8 = 90.08
+    plan = build_recommended_plan(RecommendedPreset.LEAF_STANDARD, 7, lfp(), PresetOptions(LeafGeneration.ZE1_40, ah))
+    assert plan.extra == [(164, 15), (129, 3650), (128, 901)]
+    assert [r for r, _ in plan.steps] == [164, 129, 128, 137]
+    assert any(ch["key"] == "rated_capacity" for ch in plan.changes)
+    gen1 = build_recommended_plan(RecommendedPreset.LEAF_LONG_LIFE, 7, lfp(), PresetOptions(LeafGeneration.ZE0_24))
+    assert gen1.extra == [(164, 15), (129, 3750)]
+
+
+def test_capacity_input_is_checked():
+    from bms_japan.protocol.recommended import LeafGeneration, PresetOptions, rated_capacity_ah
+
+    assert rated_capacity_ah(LeafGeneration.ZE1_40, 0, 80) is None
+    assert rated_capacity_ah(LeafGeneration.ZE1_40, 2, 101) is None
+    assert rated_capacity_ah(LeafGeneration.ZE1_40, True, 80) is None
+    assert build_recommended_plan(RecommendedPreset.LEAF_STANDARD, 7, lfp(), PresetOptions(LeafGeneration.ZE1_40, 5000.0)) is None
+    assert build_recommended_plan(RecommendedPreset.LEAF_STANDARD, 7, lfp(), PresetOptions(LeafGeneration.ZE1_40, float("nan"))) is None

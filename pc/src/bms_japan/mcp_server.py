@@ -303,12 +303,22 @@ async def set_recommended_preset(
     accept_chemistry_change: Annotated[
         bool, Field(description="電池の種類が変わる（例: リン酸鉄→三元系）ことと、セルがリーフであることを利用者が確認した場合だけ true")
     ] = False,
+    generation: Annotated[
+        str | None,
+        Field(
+            description="リーフの世代（公称電圧を合わせる）: ze0_24（24kWh 2010-2013）/ aze0_24（24kWh 2013-2017）/ "
+            "aze0_30（30kWh）/ ze1_40（40kWh）/ ze1_62（62kWh e+）。分からなければ省略"
+        ),
+    ] = None,
+    parallel: Annotated[int | None, Field(description="1 直列あたりの並列セル数（省略時は車両と同じ）。soh と一緒に使う")] = None,
+    soh: Annotated[int | None, Field(description="残り容量の割合（%、30〜100）。指定すると定格容量＝セル容量×並列数×SOH も書き込む")] = None,
     password: Password = None,
     address: Address = None,
 ) -> dict[str, Any]:
     return await svc.set_recommended_preset(
         manager(), preset, password, confirm, address, confirm_token=confirm_token,
         accept_immediate_effect=accept_immediate_effect, accept_chemistry_change=accept_chemistry_change,
+        generation=generation, parallel=parallel, soh=soh,
     )
 
 
