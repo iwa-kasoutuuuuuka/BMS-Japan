@@ -11,6 +11,10 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+import secrets
+import json
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -228,6 +232,15 @@ class ManagerConfig:
     demo_state_file: str | Path | None = None
     reply_timeout: float = 3.0
     poll_interval: float | None = None  # None なら定期読み出しをしない
+    #: True なら address を指定した読み書きで、まだつないでいない機器に自動でつなぐ（CLI 用）。
+    #: MCP では False（接続すると BMS に時刻を書き込むため、読み取りのツールが勝手に書き込まないように）
+    auto_connect: bool = True
+    #: True なら、書き込みにはプレビューで渡した confirm_token が必要（MCP 用）
+    require_confirm_token: bool = False
+
+
+#: 確認トークンの有効時間（秒）
+CONFIRM_TOKEN_TTL_S = 120
 
 
 class ConnectionManager:
@@ -237,6 +250,23 @@ class ConnectionManager:
         self.config = config or ManagerConfig()
         self.registry = DemoRegistry(self.config.demo_state_file) if self.config.demo else None
         self.clients: dict[str, BmsClient] = {}
+        self._confirm_tokens: dict[str, tuple[str, float]] = {}
+
+    # ---- 書き込みの確認トークン ----
+
+    def issue_confirm_token(self, digest: str) -> str:
+        """プレビューのときに発行する。書き込む内容（digest）に結び付き、1 回だけ・短時間だけ使える"""
+        now = time.monotonic()
+        self._confirm_tokens = {k: v for k, v in self._confirm_tokens.items() if v[1] > now}
+        token = secrets.token_urlsafe(9)
+        self._confirm_tokens[token] = (digest, now + CONFIRM_TOKEN_TTL_S)
+        return token
+
+    def consume_confirm_token(self, token: str | None, digest: str) -> bool:
+        if not token:
+            return False
+        entry = self._confirm_tokens.pop(token, None)
+        return entry is not None and entry[0] == digest and entry[1] > time.monotonic()
 
     @property
     def demo(self) -> bool:
@@ -322,6 +352,11 @@ class ConnectionManager:
                     "ambiguous_address",
                     "複数台に接続中です。address を指定してください / several devices connected; specify address",
                 )
+        if not self.config.auto_connect and self._key(address) not in self.clients:
+            raise BmsJapanError(
+                "not_connected",
+                "まだ接続していません。先に connect を呼んでください / not connected; call connect first",
+            )
         return await self.connect(address)
 
     def list_connections(self) -> list[dict[str, Any]]:
@@ -411,6 +446,42 @@ async def _check_password(c: BmsClient, password: str | None) -> dict[str, Any]:
     return {"password_required": True}
 
 
+def _digest(action: str, address: str, params: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps([action, address, params], sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _gate(
+    mgr: ConnectionManager,
+    c: BmsClient,
+    action: str,
+    params: dict[str, Any],
+    details: dict[str, Any],
+    message: str,
+    confirm: bool,
+    confirm_token: str | None,
+) -> dict[str, Any] | None:
+    """confirm が無ければプレビューを返す。確認トークンが必要な設定なら、書き込み前にトークンを確かめる。
+    書き込んでよければ None を返す。"""
+    digest = _digest(action, c.address, params)
+    if not confirm:
+        out = {**_header(c), **_preview(action, details, message)}
+        if mgr.config.require_confirm_token:
+            out["confirm_token"] = mgr.issue_confirm_token(digest)
+            out["confirm_token_expires_in_s"] = CONFIRM_TOKEN_TTL_S
+            out["message"] = (
+                message + " 利用者に内容を見せて同意を得てから、confirm=true と confirm_token を付けて呼び直してください。"
+                " / Show this to the user, get explicit approval, then call again with confirm=true and confirm_token."
+            )
+        return out
+    if mgr.config.require_confirm_token and not mgr.consume_confirm_token(confirm_token, digest):
+        raise BmsJapanError(
+            "confirm_token_required",
+            "書き込みには、先に confirm なしで呼んで受け取った confirm_token が必要です（内容が同じで、"
+            f"{CONFIRM_TOKEN_TTL_S} 秒以内・1 回限り）。 / A matching confirm_token from a preview call is required.",
+        )
+    return None
+
+
 def _preview(action: str, details: dict[str, Any], message: str) -> dict[str, Any]:
     return {
         "ok": False,
@@ -429,6 +500,7 @@ async def set_setting(
     password: str | None = None,
     confirm: bool = False,
     address: str | None = None,
+    confirm_token: str | None = None,
 ) -> dict[str, Any]:
     setting = SETTINGS_BY_KEY.get(key.strip().lower())
     if setting is None:
@@ -438,7 +510,8 @@ async def set_setting(
         raise BmsJapanError("not_editable", f"{setting.label} は表示のみで、変更できません / read-only setting")
     c = await mgr.client(address)
     current = await _io(c.read_settings())
-    res = validate(setting, value, current)
+    live_cells = (await _io(c.read_live())).cell_count if setting.key in ("pack_ov", "pack_uv") else None
+    res = validate(setting, value, current, live_cells)
     if not res.ok:
         raise BmsJapanError(f"invalid_{res.kind}", f"{setting.label}: {res.message(setting)}")
     assert res.raw is not None
@@ -454,8 +527,12 @@ async def set_setting(
         "unit": setting.unit,
         "before": None if before is None else float(setting.format(before)),
     }
-    if not confirm:
-        return {**_header(c), **_preview("set_setting", details, f"{setting.label} を {setting.format(new_value)} {setting.unit} に変更します。")}
+    pre = _gate(
+        mgr, c, "set_setting", {"key": setting.key, "raw": res.raw}, details,
+        f"{setting.label} を {setting.format(new_value)} {setting.unit} に変更します。", confirm, confirm_token,
+    )
+    if pre is not None:
+        return pre
     await _io(c.write_register(setting.register, res.raw))
     after = await _io(c.read_settings())
     after_raw = after.raw.get(setting.register)
@@ -480,7 +557,11 @@ async def set_switch(
     password: str | None = None,
     confirm: bool = False,
     address: str | None = None,
+    confirm_token: str | None = None,
 ) -> dict[str, Any]:
+    # "false" などの文字列は真偽値として扱わない（"false" は真と評価されてしまうため）
+    if not isinstance(on, bool):
+        raise BmsJapanError("invalid_value", "on は true / false で指定してください")
     try:
         sw = SwitchSetting.from_name(switch)
     except ValueError as e:
@@ -497,8 +578,12 @@ async def set_switch(
         "value": "ON" if on else "OFF",
         "before": None if current.switch(sw) is None else ("ON" if current.switch(sw) else "OFF"),
     }
-    if not confirm:
-        return {**_header(c), **_preview("set_switch", details, sw.confirm_text(on).replace("\n", " "))}
+    pre = _gate(
+        mgr, c, "set_switch", {"switch": sw.name, "value": value}, details,
+        sw.confirm_text(on).replace("\n", " "), confirm, confirm_token,
+    )
+    if pre is not None:
+        return pre
     await _io(c.write_register(sw.register, value))
     after = await _io(c.read_settings())
     got = after.switch(sw)
@@ -517,6 +602,7 @@ async def set_battery_type(
     password: str | None = None,
     confirm: bool = False,
     address: str | None = None,
+    confirm_token: str | None = None,
 ) -> dict[str, Any]:
     try:
         bt = BatteryType.from_name(battery_type)
@@ -553,9 +639,12 @@ async def set_battery_type(
         "cell_uv": bt.cell_uv,
         "cell_uv_release": bt.cell_uv_release,
     }
-    if not confirm:
-        msg = t("battery_preset_warning", n)
-        return {**_header(c), **_preview("set_battery_type", details, f"電池の種類を {bt.label} にします。{msg}")}
+    pre = _gate(
+        mgr, c, "set_battery_type", {"type": bt.name, "values": values}, details,
+        f"電池の種類を {bt.label} にします。{t('battery_preset_warning', n)}", confirm, confirm_token,
+    )
+    if pre is not None:
+        return pre
     await _io(c.write_registers(137, values))
     after = await _io(c.read_settings())
     got = [after.raw.get(137 + i) for i in range(len(values))]
@@ -580,6 +669,7 @@ async def change_password(
     repeat_password: str | None = None,
     confirm: bool = False,
     address: str | None = None,
+    confirm_token: str | None = None,
 ) -> dict[str, Any]:
     c = await mgr.client(address)
     current = await _io(c.read_password())
@@ -588,11 +678,13 @@ async def change_password(
     if check is not PasswordChangeCheck.OK:
         raise BmsJapanError(f"password_{check.value}", check.message)
     details = {"start_register": BmsPassword.START, "count": BmsPassword.COUNT, "new_password_length": len(new_password)}
-    if not confirm:
-        return {
-            **_header(c),
-            **_preview("change_password", details, "BMS のパスワードを変更します（新しいパスワードを忘れないようにしてください）。"),
-        }
+    # トークンには新しいパスワードそのものではなく、ハッシュを結び付ける
+    pre = _gate(
+        mgr, c, "change_password", {"new_sha256": hashlib.sha256(new_password.encode()).hexdigest()}, details,
+        "BMS のパスワードを変更します（新しいパスワードを忘れないようにしてください）。", confirm, confirm_token,
+    )
+    if pre is not None:
+        return pre
     await _io(c.write_password(new_password))
     after = await _io(c.read_password())
     return {**_header(c), "ok": after == new_password, "written": details, "verified": after == new_password}
@@ -650,6 +742,7 @@ async def set_actual_capacity(
     password: str | None = None,
     confirm: bool = False,
     address: str | None = None,
+    confirm_token: str | None = None,
 ) -> dict[str, Any]:
     mah = ActualCapacity.parse(capacity_ah)
     if mah is None:
@@ -668,8 +761,12 @@ async def set_actual_capacity(
         "unit": "Ah",
         "before": round(before / 1000.0, 1),
     }
-    if not confirm:
-        return {**_header(c), **_preview("set_actual_capacity", details, f"実容量を {ActualCapacity.format(mah)} Ah にします。")}
+    pre = _gate(
+        mgr, c, "set_actual_capacity", {"mah": mah}, details,
+        f"実容量を {ActualCapacity.format(mah)} Ah にします。", confirm, confirm_token,
+    )
+    if pre is not None:
+        return pre
     await _io(c.write_actual_capacity(mah))
     after = await _io(c.read_actual_capacity())
     return {
@@ -690,6 +787,8 @@ async def get_pack_summary(
         pm = PackMode.from_name(mode)
     except ValueError as e:
         raise BmsJapanError("invalid_mode", f"不明なつなぎ方です: {mode}（single / parallel / series）") from e
+    # 同じ台が二重に入ると、電流や容量を二重に数えてしまうので除く
+    addresses = list(dict.fromkeys(a.strip().upper() for a in addresses if a and a.strip()))
     if not addresses:
         addresses = list(mgr.clients)
     if not addresses:

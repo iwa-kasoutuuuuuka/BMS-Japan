@@ -25,6 +25,18 @@ class FoundDevice:
         return self.adv_has_jhb or (self.name is not None and "JHB" in self.name.upper())
 
 
+def clean_device_name(name: str | None) -> str | None:
+    """機器が名乗る名前は信用できない（悪意のある機器が、AI への指示や端末の制御文字を名前に入れられる）。
+    制御文字・書式文字（文字の向きを変える Bidi など）を取り除き、32 文字までにする。"""
+    if name is None:
+        return None
+    import unicodedata
+
+    kept = "".join(ch for ch in str(name) if not unicodedata.category(ch).startswith("C"))
+    kept = " ".join(kept.split())[:32]
+    return kept or None
+
+
 def adv_contains_jhb(manufacturer_data: dict[int, bytes], service_data: dict[str, bytes] | None = None) -> bool:
     """広告データのどこかに "JHB" のバイト列があるか"""
     blobs = list(manufacturer_data.values()) + list((service_data or {}).values())

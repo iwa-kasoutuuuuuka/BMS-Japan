@@ -80,13 +80,34 @@ async def test_in_process_flow():
     await svc.connect(mgr, "DEMO-01")
     preview = await svc.set_setting(mgr, "soc", 55.0)
     assert preview["dry_run"]
-    done = await svc.set_setting(mgr, "soc", 55.0, confirm=True)
+    token = preview["confirm_token"]
+    # トークン無し・違う内容のトークンでは書き込めない
+    with pytest.raises(svc.BmsJapanError, match="confirm_token_required"):
+        await svc.set_setting(mgr, "soc", 55.0, confirm=True)
+    with pytest.raises(svc.BmsJapanError, match="confirm_token_required"):
+        await svc.set_setting(mgr, "soc", 60.0, confirm=True, confirm_token=token)
+    # 上の失敗でトークンは使い切ったので、もう一度プレビューから
+    token = (await svc.set_setting(mgr, "soc", 55.0))["confirm_token"]
+    done = await svc.set_setting(mgr, "soc", 55.0, confirm=True, confirm_token=token)
     assert done["verified"]
+    # 同じトークンは 2 回使えない
+    with pytest.raises(svc.BmsJapanError, match="confirm_token_required"):
+        await svc.set_setting(mgr, "soc", 55.0, confirm=True, confirm_token=token)
+
+
+async def test_read_tools_do_not_auto_connect():
+    """読み取りのツールは勝手に接続しない（接続時に BMS へ時刻を書き込むため）"""
+    from bms_japan import service as svc
+
+    mgr = mcp_server.manager()
+    with pytest.raises(svc.BmsJapanError, match="not_connected"):
+        await svc.get_live_data(mgr, "DEMO-03")
 
 
 async def test_tool_error_message_reaches_client():
     from mcp.server.mcpserver.exceptions import ToolError
 
+    await mcp_server.mcp.call_tool("connect", {"address": "DEMO-01"})
     with pytest.raises(ToolError) as e:
         await mcp_server.mcp.call_tool("set_setting", {"key": "cell_ov", "value": 9.9, "address": "DEMO-01"})
     assert "invalid_out_of_range" in str(e.value)
@@ -125,13 +146,22 @@ async def test_stdio_server_smoke(tmp_path):
 
                 # confirm なし → プレビューだけ
                 r = await session.call_tool("set_switch", {"switch": "charge", "on": False})
-                assert _payload(r)["dry_run"] is True
+                preview = _payload(r)
+                assert preview["dry_run"] is True
+                # トークン無しでは書き込めない
                 r = await session.call_tool("set_switch", {"switch": "charge", "on": False, "confirm": True})
+                assert _is_error(r)
+                r = await session.call_tool("set_switch", {"switch": "charge", "on": False})
+                token = _payload(r)["confirm_token"]
+                r = await session.call_tool(
+                    "set_switch", {"switch": "charge", "on": False, "confirm": True, "confirm_token": token}
+                )
                 assert _payload(r)["verified"] is True
 
                 r = await session.call_tool("get_history", {"page": 1, "pages": 1})
                 assert _payload(r)["reached_end"] is True
 
+                await session.call_tool("connect", {"address": "DEMO-02"})
                 r = await session.call_tool("get_pack_summary", {"addresses": ["DEMO-01", "DEMO-02"], "mode": "series"})
                 assert _payload(r)["summary"]["mode"]["label"] == "直列"
 

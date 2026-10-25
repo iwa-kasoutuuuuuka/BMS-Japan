@@ -184,8 +184,11 @@ async def test_pack_summary(mgr):
     assert ser["summary"]["voltage"]["value"] == pytest.approx(v, abs=0.2)
     assert ser["summary"]["soc"]["value"] == 47.5
     assert ser["summary"]["alarm_unit_count"]["value"] == 1
+    # 同じ台を重ねて指定しても 1 台として数える（電流・容量を二重に数えない）
+    dup = await svc.get_pack_summary(mgr, ["DEMO-01", "demo-01", "DEMO-01"], "parallel")
+    assert dup["summary"]["unit_count"] == 1
     with pytest.raises(BmsJapanError):
-        await svc.get_pack_summary(mgr, ["DEMO-01"] * 7, "parallel")
+        await svc.get_pack_summary(mgr, [f"AA:BB:CC:DD:EE:0{i}" for i in range(7)], "parallel")
 
 
 async def test_ambiguous_address(mgr):

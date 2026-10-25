@@ -393,11 +393,9 @@ def _setup_console() -> None:
 def main(argv: list[str] | None = None) -> int:
     _setup_console()
     args = build_parser().parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.WARNING,
-        format="%(levelname)s %(name)s: %(message)s",
-        stream=sys.stderr,
-    )
+    # -v でも bleak など他のライブラリのログは WARNING のまま（受信データにパスワードが含まれることがあるため）
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s", stream=sys.stderr)
+    logging.getLogger("bms_japan").setLevel(logging.DEBUG if args.verbose else logging.WARNING)
     try:
         return asyncio.run(dispatch(args))
     except KeyboardInterrupt:

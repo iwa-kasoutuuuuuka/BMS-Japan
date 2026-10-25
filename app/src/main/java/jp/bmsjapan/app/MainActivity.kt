@@ -15,6 +15,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
+import jp.bmsjapan.app.ble.PollingPolicy
 import jp.bmsjapan.app.ui.BmsTheme
 import jp.bmsjapan.app.ui.BmsViewModel
 import jp.bmsjapan.app.ui.DeviceScreen
@@ -23,6 +24,17 @@ import jp.bmsjapan.app.ui.ScanScreen
 import jp.bmsjapan.app.ui.isDarkTheme
 
 class MainActivity : ComponentActivity() {
+    // 画面が見えている間だけ運転データを読む（裏に回ったら止め、戻ったらすぐ読み直す）
+    override fun onStart() {
+        super.onStart()
+        PollingPolicy.setForeground(true)
+    }
+
+    override fun onStop() {
+        PollingPolicy.setForeground(false)
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

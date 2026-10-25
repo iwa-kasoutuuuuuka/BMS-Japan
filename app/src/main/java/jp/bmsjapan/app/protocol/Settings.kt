@@ -140,13 +140,125 @@ sealed interface ValidationResult {
     data class OutOfRange(val min: String, val max: String) : ValidationResult
     data class MustBeAbove(val release: String) : ValidationResult
     data class MustBeBelow(val release: String) : ValidationResult
+
+    /** 電池の種類が分からない（または読めない）ので、電圧の保護値は変更させない */
+    data object NeedsBatteryType : ValidationResult
+
+    /** セル数が分からないので、総電圧の保護値は変更させない */
+    data object NeedsCellCount : ValidationResult
+
+    /** 他の項目との大小関係（例: セル過電圧 > 均等化開始電圧 > セル低電圧）を満たさない */
+    data class MustBeAboveOther(val other: Setting, val value: String) : ValidationResult
+    data class MustBeBelowOther(val other: Setting, val value: String) : ValidationResult
 }
 
-fun Setting.validate(input: String, current: BmsSettings): ValidationResult {
+/** 安全のための範囲（表示値） */
+data class SafeRange(val min: Double, val max: Double)
+
+/**
+ * 電池の種類ごとの安全な範囲（1 セルあたり）。
+ * 元アプリには無い、このアプリ独自の制限。誤った値で保護が実質無効になる（例: リン酸鉄で過電圧保護 4.5 V）のを防ぐ。
+ */
+data class ChemistryLimits(
+    val cellOv: SafeRange,
+    val cellUv: SafeRange,
+    val balanceStart: SafeRange,
+    val cellNominal: SafeRange,
+    val chargeUt: SafeRange,
+)
+
+object SafetyLimits {
+    val BY_TYPE: Map<BatteryType, ChemistryLimits> = mapOf(
+        BatteryType.LFP to ChemistryLimits(
+            cellOv = SafeRange(3.40, 3.75), cellUv = SafeRange(2.00, 3.00),
+            balanceStart = SafeRange(3.20, 3.65), cellNominal = SafeRange(3.00, 3.40),
+            chargeUt = SafeRange(0.0, 15.0),
+        ),
+        BatteryType.NCM to ChemistryLimits(
+            cellOv = SafeRange(3.90, 4.25), cellUv = SafeRange(2.50, 3.50),
+            balanceStart = SafeRange(3.60, 4.20), cellNominal = SafeRange(3.50, 3.80),
+            chargeUt = SafeRange(0.0, 15.0),
+        ),
+        BatteryType.LTO to ChemistryLimits(
+            cellOv = SafeRange(2.40, 2.90), cellUv = SafeRange(1.50, 2.30),
+            balanceStart = SafeRange(2.30, 2.80), cellNominal = SafeRange(2.20, 2.50),
+            // チタン酸は低温でも充電できる
+            chargeUt = SafeRange(-30.0, 15.0),
+        ),
+    )
+
+    /** 種類によらない温度の範囲（充電時の高温は 60 ℃ まで、など） */
+    private val TEMPERATURE: Map<Setting, SafeRange> = mapOf(
+        Setting.CHARGE_OT to SafeRange(20.0, 60.0),
+        Setting.DISCHARGE_OT to SafeRange(30.0, 75.0),
+        Setting.DISCHARGE_UT to SafeRange(-40.0, 10.0),
+        Setting.MOS_OT to SafeRange(50.0, 110.0),
+    )
+
+    private val CELL_VOLTAGE_SETTINGS = setOf(Setting.CELL_OV, Setting.CELL_UV, Setting.BALANCE_START_V, Setting.CELL_NOMINAL)
+    private val PACK_VOLTAGE_SETTINGS = setOf(Setting.PACK_OV, Setting.PACK_UV)
+
+    /** セル数: 設定のレジスタ 130 を優先し、無ければ運転データのセル数（どちらも 1〜48 のときだけ） */
+    fun cellCount(current: BmsSettings, liveCells: Int?): Int? =
+        current.raw[130]?.takeIf { it in MIN_PRESET_CELLS..MAX_PRESET_CELLS }
+            ?: liveCells?.takeIf { it in MIN_PRESET_CELLS..MAX_PRESET_CELLS }
+
+    /**
+     * その項目に入力できる範囲。項目の基本の範囲と、電池の種類・セル数から決まる範囲の重なり。
+     * 電池の種類やセル数が分からず決められないときは、その理由を返す。
+     */
+    fun rangeFor(setting: Setting, current: BmsSettings, liveCells: Int?): Pair<SafeRange?, ValidationResult?> {
+        val base = SafeRange(setting.min, setting.max)
+        val chem = current.batteryType?.let { BY_TYPE[it] }
+        val specific: SafeRange? = when {
+            setting in CELL_VOLTAGE_SETTINGS -> {
+                chem ?: return null to ValidationResult.NeedsBatteryType
+                when (setting) {
+                    Setting.CELL_OV -> chem.cellOv
+                    Setting.CELL_UV -> chem.cellUv
+                    Setting.BALANCE_START_V -> chem.balanceStart
+                    else -> chem.cellNominal
+                }
+            }
+            setting in PACK_VOLTAGE_SETTINGS -> {
+                chem ?: return null to ValidationResult.NeedsBatteryType
+                val n = cellCount(current, liveCells) ?: return null to ValidationResult.NeedsCellCount
+                // 総電圧は「セルの安全範囲 × セル数」の中に収める
+                SafeRange(chem.cellUv.min * n, chem.cellOv.max * n)
+            }
+            setting == Setting.CHARGE_UT -> (chem ?: BY_TYPE.getValue(BatteryType.LFP)).chargeUt
+            else -> TEMPERATURE[setting]
+        }
+        val r = if (specific == null) base else SafeRange(maxOf(base.min, specific.min), minOf(base.max, specific.max))
+        return r to null
+    }
+}
+
+fun Setting.validate(input: String, current: BmsSettings, liveCells: Int? = null): ValidationResult {
     val v = input.trim().replace(',', '.').toDoubleOrNull() ?: return ValidationResult.NotANumber
     // "NaN" や "Infinity" も数値として読めてしまうので、ここで弾く（範囲の比較をすり抜けるため）
     if (!v.isFinite()) return ValidationResult.NotANumber
-    if (v < min - 1e-9 || v > max + 1e-9) return ValidationResult.OutOfRange(format(min), format(max))
+    return validateValue(v, current, liveCells)
+}
+
+/** 表示値での確認（ViewModel での書き込み直前の再確認にも使う） */
+fun Setting.validateValue(v: Double, current: BmsSettings, liveCells: Int? = null): ValidationResult {
+    if (!editable || !v.isFinite()) return ValidationResult.NotANumber
+    val (range, blocked) = SafetyLimits.rangeFor(this, current, liveCells)
+    if (blocked != null) return blocked
+    val r = range!!
+    if (v < r.min - 1e-9 || v > r.max + 1e-9) return ValidationResult.OutOfRange(format(r.min), format(r.max))
+    // 電圧の大小関係: セル過電圧 > 均等化開始電圧 > セル低電圧
+    fun other(s: Setting) = current[s]
+    when (this) {
+        Setting.CELL_OV -> other(Setting.BALANCE_START_V)?.let { if (v <= it) return ValidationResult.MustBeAboveOther(Setting.BALANCE_START_V, Setting.BALANCE_START_V.format(it)) }
+        Setting.CELL_UV -> other(Setting.BALANCE_START_V)?.let { if (v >= it) return ValidationResult.MustBeBelowOther(Setting.BALANCE_START_V, Setting.BALANCE_START_V.format(it)) }
+        Setting.BALANCE_START_V -> {
+            other(Setting.CELL_OV)?.let { if (v >= it) return ValidationResult.MustBeBelowOther(Setting.CELL_OV, Setting.CELL_OV.format(it)) }
+            other(Setting.CELL_UV)?.let { if (v <= it) return ValidationResult.MustBeAboveOther(Setting.CELL_UV, Setting.CELL_UV.format(it)) }
+        }
+        else -> Unit
+    }
     val release = current.release(this)
     if (release != null) {
         when (releaseRule) {
@@ -156,7 +268,7 @@ fun Setting.validate(input: String, current: BmsSettings): ValidationResult {
         }
     }
     val raw = encoding.encode(v)
-    if (raw !in 0..0xFFFF) return ValidationResult.OutOfRange(format(min), format(max))
+    if (raw !in 0..0xFFFF) return ValidationResult.OutOfRange(format(r.min), format(r.max))
     return ValidationResult.Ok(raw)
 }
 

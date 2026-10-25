@@ -26,6 +26,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -300,6 +301,7 @@ fun CellTile(index: Int, volts: Double, minV: Double, maxV: Double, isMax: Boole
 @Composable
 fun ThemeMenuButton(vm: BmsViewModel) {
     val mode by vm.themeMode.collectAsState()
+    val interval by vm.pollIntervalMs.collectAsState()
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }) {
@@ -322,6 +324,27 @@ fun ThemeMenuButton(vm: BmsViewModel) {
                     leadingIcon = { RadioButton(selected = mode == m, onClick = null) },
                     onClick = {
                         vm.setThemeMode(m)
+                        open = false
+                    },
+                )
+            }
+            HorizontalDivider()
+            Text(
+                stringResource(R.string.poll_menu),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            listOf(
+                2_000L to R.string.poll_fast,
+                5_000L to R.string.poll_normal,
+                10_000L to R.string.poll_slow,
+            ).forEach { (ms, label) ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(label)) },
+                    leadingIcon = { RadioButton(selected = interval == ms, onClick = null) },
+                    onClick = {
+                        vm.setPollInterval(ms)
                         open = false
                     },
                 )

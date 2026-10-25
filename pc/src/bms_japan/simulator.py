@@ -138,10 +138,28 @@ class FakeBms:
         return {"regs": regs, "aux": {str(k): v for k, v in self.aux.items()}}
 
     def load_state(self, state: dict) -> None:
-        for k, v in state.get("regs", {}).items():
-            self.regs[int(k)] = int(v)
-        for k, v in state.get("aux", {}).items():
-            self.aux[int(k)] = int(v)
+        """保存した状態を読む。形や値がおかしいものは無視する（壊れたファイルで落ちないように）"""
+        if not isinstance(state, dict):
+            return
+        allowed = {r for a, b in self.PERSIST_RANGES for r in range(a, b + 1)}
+        regs = state.get("regs", {})
+        if isinstance(regs, dict):
+            for k, v in regs.items():
+                try:
+                    r, val = int(k), int(v)
+                except (TypeError, ValueError):
+                    continue
+                if r in allowed and 0 <= val <= 0xFFFF:
+                    self.regs[r] = val
+        aux = state.get("aux", {})
+        if isinstance(aux, dict):
+            for k, v in aux.items():
+                try:
+                    r, val = int(k), int(v)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= val <= 0xFFFFFFFF:
+                    self.aux[r] = val
 
     # ---- 疑似データ ----
 

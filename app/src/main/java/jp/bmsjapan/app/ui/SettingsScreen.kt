@@ -50,6 +50,7 @@ import jp.bmsjapan.app.protocol.BatteryType
 import jp.bmsjapan.app.protocol.BmsSettings
 import jp.bmsjapan.app.protocol.LiveData
 import jp.bmsjapan.app.protocol.PasswordChangeCheck
+import jp.bmsjapan.app.protocol.SafetyLimits
 import jp.bmsjapan.app.protocol.Setting
 import jp.bmsjapan.app.protocol.SettingGroup
 import jp.bmsjapan.app.protocol.SwitchSetting
@@ -220,6 +221,7 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
         EditSettingDialog(
             setting = setting,
             settings = s ?: return@let,
+            liveCells = live.cellCount,
             onDismiss = { editing = null },
             onConfirm = { raw ->
                 editing = null
@@ -304,8 +306,10 @@ private fun SettingRow(label: String, value: String, caption: String?, enabled: 
 }
 
 @Composable
-private fun EditSettingDialog(setting: Setting, settings: BmsSettings, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+private fun EditSettingDialog(setting: Setting, settings: BmsSettings, liveCells: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
     val current = settings[setting]
+    // 電池の種類・セル数から決まる、実際に入力できる範囲
+    val (range, blocked) = SafetyLimits.rangeFor(setting, settings, liveCells)
     var input by remember { mutableStateOf(current?.let(setting::format) ?: "") }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -313,6 +317,16 @@ private fun EditSettingDialog(setting: Setting, settings: BmsSettings, onDismiss
     val rangeFmt = stringResource(R.string.error_range)
     val aboveFmt = stringResource(R.string.error_above_release)
     val belowFmt = stringResource(R.string.error_below_release)
+    val needsType = stringResource(R.string.error_needs_battery_type)
+    val needsCells = stringResource(R.string.error_needs_cell_count)
+    val aboveOtherFmt = stringResource(R.string.error_above_other)
+    val belowOtherFmt = stringResource(R.string.error_below_other)
+    val otherLabels = Setting.entries.associateWith { stringResource(it.label) }
+    val blockedText = when (blocked) {
+        ValidationResult.NeedsBatteryType -> needsType
+        ValidationResult.NeedsCellCount -> needsCells
+        else -> null
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -336,23 +350,32 @@ private fun EditSettingDialog(setting: Setting, settings: BmsSettings, onDismiss
                     suffix = { Text(setting.unit) },
                     singleLine = true,
                     isError = error != null,
+                    enabled = blockedText == null,
                     supportingText = {
-                        Text(error ?: stringResource(R.string.allowed_range, setting.format(setting.min), setting.format(setting.max), setting.unit))
+                        Text(
+                            error ?: blockedText ?: range?.let {
+                                stringResource(R.string.allowed_range, setting.format(it.min), setting.format(it.max), setting.unit)
+                            } ?: "",
+                        )
                     },
                     keyboardOptions = KeyboardOptions(
-                        keyboardType = if (setting.min < 0) KeyboardType.Text else KeyboardType.Decimal,
+                        keyboardType = if ((range?.min ?: setting.min) < 0) KeyboardType.Text else KeyboardType.Decimal,
                     ),
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                when (val r = setting.validate(input, settings)) {
+            TextButton(enabled = blockedText == null, onClick = {
+                when (val r = setting.validate(input, settings, liveCells)) {
                     is ValidationResult.Ok -> onConfirm(r.raw)
                     ValidationResult.NotANumber -> error = notANumber
                     is ValidationResult.OutOfRange -> error = rangeFmt.format(r.min, r.max)
                     is ValidationResult.MustBeAbove -> error = aboveFmt.format(r.release)
                     is ValidationResult.MustBeBelow -> error = belowFmt.format(r.release)
+                    ValidationResult.NeedsBatteryType -> error = needsType
+                    ValidationResult.NeedsCellCount -> error = needsCells
+                    is ValidationResult.MustBeAboveOther -> error = aboveOtherFmt.format(otherLabels.getValue(r.other), r.value)
+                    is ValidationResult.MustBeBelowOther -> error = belowOtherFmt.format(otherLabels.getValue(r.other), r.value)
                 }
             }) { Text(stringResource(R.string.action_write)) }
         },

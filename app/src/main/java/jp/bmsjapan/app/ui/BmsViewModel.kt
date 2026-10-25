@@ -12,6 +12,7 @@ import jp.bmsjapan.app.ble.BmsConnection
 import jp.bmsjapan.app.ble.BmsScanner
 import jp.bmsjapan.app.ble.ConnectionState
 import jp.bmsjapan.app.ble.FoundDevice
+import jp.bmsjapan.app.ble.PollingPolicy
 import jp.bmsjapan.app.data.SavedDevice
 import jp.bmsjapan.app.data.SavedDevicesCodec
 import jp.bmsjapan.app.data.SavedSetup
@@ -29,6 +30,8 @@ import jp.bmsjapan.app.protocol.PackSummary
 import jp.bmsjapan.app.protocol.PasswordChangeCheck
 import jp.bmsjapan.app.protocol.Setting
 import jp.bmsjapan.app.protocol.SwitchSetting
+import jp.bmsjapan.app.protocol.validateValue
+import jp.bmsjapan.app.protocol.ValidationResult
 import jp.bmsjapan.app.protocol.buildBatteryPreset
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -127,6 +130,20 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
     fun setThemeMode(m: ThemeMode) {
         _themeMode.value = m
         prefs.edit { putString(PREF_THEME, m.name) }
+    }
+
+    // ---- 運転データの更新間隔（2 秒・5 秒・10 秒） ----
+    private val _pollIntervalMs = MutableStateFlow(
+        prefs.getLong(PREF_POLL_INTERVAL, PollingPolicy.DEFAULT_INTERVAL_MS)
+            .takeIf { it in PollingPolicy.INTERVALS_MS } ?: PollingPolicy.DEFAULT_INTERVAL_MS,
+    ).also { PollingPolicy.setInterval(it.value) }
+    val pollIntervalMs: StateFlow<Long> = _pollIntervalMs.asStateFlow()
+
+    fun setPollInterval(ms: Long) {
+        if (ms !in PollingPolicy.INTERVALS_MS) return
+        _pollIntervalMs.value = ms
+        PollingPolicy.setInterval(ms)
+        prefs.edit { putLong(PREF_POLL_INTERVAL, ms) }
     }
 
     private val _mode = MutableStateFlow(PackMode.fromCode(prefs.getInt(PREF_MODE, PackMode.SINGLE.code)))
@@ -238,14 +255,14 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
                     setAttempt(address, null)
                     conn.state.first { it != ConnectionState.CONNECTED }   // 切れるまで待つ
                     if (connectionOf(address) !== conn) continue
-                    Log.i(TAG, "connection lost: $address")
+                    Log.i(TAG, "connection lost")
                 }
                 if (!_autoReconnect.value || attempt >= MAX_RECONNECT_ATTEMPTS) break
                 attempt++
                 setAttempt(address, attempt)
                 delay(RECONNECT_DELAYS_MS[minOf(attempt - 1, RECONNECT_DELAYS_MS.lastIndex)])
                 if (connectionOf(address) !== conn) continue
-                Log.i(TAG, "reconnecting $address ($attempt/$MAX_RECONNECT_ATTEMPTS)")
+                Log.i(TAG, "reconnecting ($attempt/$MAX_RECONNECT_ATTEMPTS)")
                 replaceConnection(address)
             }
             setAttempt(address, null)
@@ -489,14 +506,16 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _busy.value = true
             try {
-                var s = BmsSettings.EMPTY.merge(BmsSettings.MAIN_START, c.readRegisters(BmsSettings.MAIN_START, BmsSettings.MAIN_COUNT))
-                // 均等化の設定は機種によって無いことがあるので、失敗しても続ける
-                runCatching { s = s.merge(BmsSettings.BALANCE_START, c.readRegisters(BmsSettings.BALANCE_START, BmsSettings.BALANCE_COUNT)) }
-                _settings.value = s
-                // 実容量は別アドレス（0x81）。対応していない機種もあるので失敗しても続ける
-                _actualCapacityMah.value = runCatching {
-                    ActualCapacity.decode(c.readRegisters(ActualCapacity.REGISTER, ActualCapacity.COUNT, Modbus.SLAVE_AUX))
-                }.onFailure { Log.w(TAG, "actual capacity not available", it) }.getOrNull()
+                c.fastTransfer {
+                    var s = BmsSettings.EMPTY.merge(BmsSettings.MAIN_START, c.readRegisters(BmsSettings.MAIN_START, BmsSettings.MAIN_COUNT))
+                    // 均等化の設定は機種によって無いことがあるので、失敗しても続ける
+                    runCatching { s = s.merge(BmsSettings.BALANCE_START, c.readRegisters(BmsSettings.BALANCE_START, BmsSettings.BALANCE_COUNT)) }
+                    _settings.value = s
+                    // 実容量は別アドレス（0x81）。対応していない機種もあるので失敗しても続ける
+                    _actualCapacityMah.value = runCatching {
+                        ActualCapacity.decode(c.readRegisters(ActualCapacity.REGISTER, ActualCapacity.COUNT, Modbus.SLAVE_AUX))
+                    }.onFailure { Log.w(TAG, "actual capacity not available: ${it.javaClass.simpleName}") }.getOrNull()
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "settings read failed", e)
                 _messages.tryEmit(UiMessage(R.string.msg_read_failed))
@@ -506,8 +525,15 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun writeSetting(setting: Setting, raw: Int) = runWrite { c ->
-        c.writeRegister(setting.register, raw)
+    fun writeSetting(setting: Setting, raw: Int) {
+        // 画面での確認に加えて、書き込み直前に最新の設定値でもう一度確かめる
+        val s = _settings.value ?: return
+        val check = setting.validateValue(setting.encoding.decode(raw), s, live.value?.cellCount)
+        if (check !is ValidationResult.Ok || check.raw != raw) {
+            _messages.tryEmit(UiMessage(R.string.msg_write_rejected))
+            return
+        }
+        runWrite { c -> c.writeRegister(setting.register, raw) }
     }
 
     fun setSwitch(sw: SwitchSetting, on: Boolean) = runWrite { c ->
@@ -609,7 +635,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         historyJob = viewModelScope.launch {
             _history.value = _history.value.copy(loading = true, error = false)
             try {
-                repeat(pages) {
+                c.fastTransfer { repeat(pages) {
                     val h = _history.value
                     if (h.complete) return@repeat
                     val page = HistoryProtocol.parsePage(
@@ -625,7 +651,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
                         (total != null && records.size >= total) ||
                         h.nextPage + 1 >= MAX_HISTORY_PAGES
                     _history.value = h.copy(records = records, total = total, nextPage = h.nextPage + 1, complete = complete)
-                }
+                } }
             } catch (e: Exception) {
                 Log.w(TAG, "history read failed", e)
                 _history.value = _history.value.copy(error = true)
@@ -643,6 +669,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         const val TAG = "BmsViewModel"
         const val PREF_MODE = "pack_mode"
         const val PREF_THEME = "theme_mode"
+        const val PREF_POLL_INTERVAL = "poll_interval_ms"
         const val DEMO_PREFIX = "DEMO-"
         const val PREF_SAVED = "saved_devices"
         const val PREF_AUTO_CONNECT = "auto_connect"

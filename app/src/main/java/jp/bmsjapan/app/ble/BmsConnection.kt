@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -58,7 +59,7 @@ class BmsTimeoutException(message: String) : Exception(message)
 class BmsConnection(
     private val context: Context,
     val address: String,
-    private val pollIntervalMs: Long = 5_000,
+
     /** デモモードのときの疑似 BMS。null なら実機に BLE で接続する */
     private val demo: DemoBms? = null,
 ) {
@@ -93,14 +94,24 @@ class BmsConnection(
             }
             return
         }
+        _state.value = ConnectionState.CONNECTING
+        assembler.reset()
+        // 複数台のときは 1 台ずつ順番につなぐ（同時に接続を始めると Android 側で失敗しやすい）
+        scope.launch {
+            PollingPolicy.connectGate.withLock {
+                startGattConnect()
+                _state.first { it != ConnectionState.CONNECTING }
+            }
+        }
+    }
+
+    private fun startGattConnect() {
         val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
-        val device = adapter?.getRemoteDevice(address)
+        val device = runCatching { adapter?.getRemoteDevice(address) }.getOrNull()
         if (device == null) {
             _state.value = ConnectionState.FAILED
             return
         }
-        _state.value = ConnectionState.CONNECTING
-        assembler.reset()
         val g = runCatching { device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE) }.getOrNull()
         if (g == null) {
             // Bluetooth がオフのときなどは null が返る
@@ -112,12 +123,26 @@ class BmsConnection(
         scope.launch {
             delay(CONNECT_TIMEOUT_MS)
             if (_state.value == ConnectionState.CONNECTING) {
-                Log.w(TAG, "connect timeout $address")
+                Log.w(TAG, "connect timeout")
                 runCatching { g.disconnect() }
                 runCatching { g.close() }
                 if (gatt === g) gatt = null
                 _state.value = ConnectionState.FAILED
             }
+        }
+    }
+
+    /**
+     * まとまった読み書き（設定の読み込み・履歴など）の間だけ、BLE の接続間隔を短くして速く送受信する。
+     * 終わったら普段の間隔（省電力寄り）に戻す。
+     */
+    suspend fun <T> fastTransfer(block: suspend () -> T): T {
+        val g = gatt
+        if (g != null) runCatching { g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH) }
+        try {
+            return block()
+        } finally {
+            if (g != null && gatt === g) runCatching { g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_BALANCED) }
         }
     }
 
@@ -188,6 +213,8 @@ class BmsConnection(
 
     private suspend fun setUp(g: BluetoothGatt) {
         try {
+            // 初期設定の間は接続間隔を短くして、つながるまでの時間を縮める
+            runCatching { g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH) }
             gattOp { g.requestMtu(512) }
             val ok = gattOp { g.discoverServices() }
             check(ok == BluetoothGatt.GATT_SUCCESS) { "service discovery failed: $ok" }
@@ -210,6 +237,7 @@ class BmsConnection(
                 }
             }.onFailure { Log.w(TAG, "time sync not acknowledged", it) }
 
+            runCatching { g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_BALANCED) }
             _state.value = ConnectionState.CONNECTED
             startPolling()
         } catch (e: Exception) {
@@ -235,12 +263,19 @@ class BmsConnection(
         }
     }
 
+    /**
+     * 運転データの定期読み出し。[PollingPolicy] の設定に従う。
+     * 設定が変わると今の待ちを打ち切ってやり直すので、アプリに戻ったときや間隔を短くしたときはすぐ読み直す。
+     */
     private fun startPolling() {
         pollJob?.cancel()
         pollJob = scope.launch {
-            while (isActive) {
-                runCatching { refreshLive() }.onFailure { Log.w(TAG, "poll failed", it) }
-                delay(pollIntervalMs)
+            PollingPolicy.settings.collectLatest { s ->
+                if (!s.active) return@collectLatest   // アプリが裏にある間は読まない
+                while (isActive) {
+                    runCatching { refreshLive() }.onFailure { Log.w(TAG, "poll failed: ${it.javaClass.simpleName}") }
+                    delay(s.intervalMs)
+                }
             }
         }
     }
@@ -344,8 +379,11 @@ class BmsConnection(
 
     private fun onNotify(c: BluetoothGattCharacteristic, value: ByteArray) {
         if (c.uuid != BmsUuids.NOTIFY) return
-        if (BuildConfig.DEBUG) Log.d(TAG, "RX ${Modbus.redactForLog(value)}")
-        for (frame in assembler.feed(value)) frames.tryEmit(frame)
+        // 受信は細切れで届くので、組み立てた後のフレーム単位で（パスワードを伏せて）ログに出す
+        for (frame in assembler.feed(value)) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "RX ${frame.javaClass.simpleName} from 0x%02X".format(frame.slave))
+            frames.tryEmit(frame)
+        }
     }
 
     /**

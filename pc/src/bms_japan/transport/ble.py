@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from .base import DataCallback, DisconnectCallback, FoundDevice, Transport, adv_contains_jhb
+from .base import DataCallback, DisconnectCallback, FoundDevice, Transport, adv_contains_jhb, clean_device_name
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ async def scan(timeout: float = 8.0, include_all: bool = False) -> list[FoundDev
     found = await BleakScanner.discover(timeout=timeout, return_adv=True)
     out: list[FoundDevice] = []
     for address, (device, adv) in found.items():
-        name = adv.local_name or device.name
+        name = clean_device_name(adv.local_name or device.name)
         jhb = adv_contains_jhb(adv.manufacturer_data, adv.service_data)
         out.append(FoundDevice(address=address, name=name, rssi=adv.rssi, adv_has_jhb=jhb))
     if not include_all:
@@ -81,7 +81,7 @@ class BleTransport(Transport):
         else:
             raise ConnectionError(f"BLE connect failed: {self.address}: {last}") from last
         self._client = client
-        self.name = getattr(client, "name", None)
+        self.name = clean_device_name(getattr(client, "name", None))
 
         if client.services.get_service(SERVICE_UUID) is None:
             await self.close()

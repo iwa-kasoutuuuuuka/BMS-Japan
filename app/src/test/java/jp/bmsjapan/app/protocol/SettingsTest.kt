@@ -80,7 +80,9 @@ class SettingsTest {
         assertEquals(ValidationResult.MustBeAbove("3.550"), Setting.CELL_OV.validate("3.50", s))
         // 低電圧の保護値は解除値 2.70 V より低くないといけない
         assertEquals(ValidationResult.MustBeBelow("2.700"), Setting.CELL_UV.validate("2.80", s))
-        assertEquals(ValidationResult.Ok(-10 + 40), Setting.CHARGE_UT.validate("-10", s))
+        // リン酸鉄では充電の低温保護は 0 ℃ 以上（解除値 5 ℃ より低く）
+        assertEquals(ValidationResult.Ok(2 + 40), Setting.CHARGE_UT.validate("2", s))
+        assertTrue(Setting.CHARGE_UT.validate("-10", s) is ValidationResult.OutOfRange)
     }
 
     @Test fun batteryPresetNcm() {

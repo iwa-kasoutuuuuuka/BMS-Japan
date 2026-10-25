@@ -252,13 +252,16 @@ EMPTY_SETTINGS = BmsSettings({})
 
 @dataclass(frozen=True)
 class ValidationResult:
-    """kind: ok / not_a_number / out_of_range / must_be_above / must_be_below / not_editable"""
+    """kind: ok / not_a_number / out_of_range / must_be_above / must_be_below / not_editable
+    / needs_battery_type / needs_cell_count / must_be_above_other / must_be_below_other"""
 
     kind: str
     raw: int | None = None
     min: str | None = None
     max: str | None = None
     release: str | None = None
+    other: str | None = None
+    other_value: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -277,12 +280,25 @@ class ValidationResult:
             return f"保護値は解除値（{self.release} {s.unit}）より小さくしてください"
         if self.kind == "not_editable":
             return "この項目は表示のみで、変更できません"
+        if self.kind == "needs_battery_type":
+            return "電池の種類が分からないため、電圧の保護値は変更できません。先に電池の種類を設定してください"
+        if self.kind == "needs_cell_count":
+            return "セル数が読めないため、総電圧の保護値は変更できません"
+        if self.kind == "must_be_above_other":
+            return f"「{self.other}」（{self.other_value}）より大きくしてください"
+        if self.kind == "must_be_below_other":
+            return f"「{self.other}」（{self.other_value}）より小さくしてください"
         return self.kind
 
 
 def parse_number(text: str | float | int) -> float | None:
-    if isinstance(text, (int, float)) and not isinstance(text, bool):
-        v = float(text)
+    if isinstance(text, bool):
+        return None
+    if isinstance(text, (int, float)):
+        try:
+            v = float(text)
+        except OverflowError:
+            return None
     else:
         try:
             v = float(str(text).strip().replace(",", "."))
@@ -293,16 +309,109 @@ def parse_number(text: str | float | int) -> float | None:
     return v
 
 
-def validate(setting: Setting, value: str | float | int, current: BmsSettings) -> ValidationResult:
-    """Kotlin の Setting.validate() と同じ確認（範囲・解除値との関係・16bit に収まるか）"""
+@dataclass(frozen=True)
+class ChemistryLimits:
+    """電池の種類ごとの安全な範囲（1 セルあたり）。元アプリには無い、このアプリ独自の制限"""
+
+    cell_ov: tuple[float, float]
+    cell_uv: tuple[float, float]
+    balance_start: tuple[float, float]
+    cell_nominal: tuple[float, float]
+    charge_ut: tuple[float, float]
+
+
+CHEMISTRY_LIMITS: dict[str, ChemistryLimits] = {
+    "LFP": ChemistryLimits((3.40, 3.75), (2.00, 3.00), (3.20, 3.65), (3.00, 3.40), (0.0, 15.0)),
+    "NCM": ChemistryLimits((3.90, 4.25), (2.50, 3.50), (3.60, 4.20), (3.50, 3.80), (0.0, 15.0)),
+    # チタン酸は低温でも充電できる
+    "LTO": ChemistryLimits((2.40, 2.90), (1.50, 2.30), (2.30, 2.80), (2.20, 2.50), (-30.0, 15.0)),
+}
+
+#: 種類によらない温度の範囲
+TEMPERATURE_LIMITS: dict[str, tuple[float, float]] = {
+    "charge_ot": (20.0, 60.0),
+    "discharge_ot": (30.0, 75.0),
+    "discharge_ut": (-40.0, 10.0),
+    "mos_ot": (50.0, 110.0),
+}
+
+_CELL_VOLTAGE_KEYS = {"cell_ov", "cell_uv", "balance_start_v", "cell_nominal"}
+_PACK_VOLTAGE_KEYS = {"pack_ov", "pack_uv"}
+
+
+def safety_cell_count(current: BmsSettings, live_cells: int | None) -> int | None:
+    """セル数: 設定のレジスタ 130 を優先し、無ければ運転データのセル数（どちらも 1〜48 のときだけ）"""
+    for n in (current.raw.get(130), live_cells):
+        if n is not None and MIN_PRESET_CELLS <= n <= MAX_PRESET_CELLS:
+            return n
+    return None
+
+
+def safe_range(setting: Setting, current: BmsSettings, live_cells: int | None = None) -> tuple[tuple[float, float] | None, str | None]:
+    """その項目に入力できる範囲（基本の範囲と、電池の種類・セル数から決まる範囲の重なり）。
+    決められないときは (None, 理由の kind) を返す。"""
+    bt = current.battery_type
+    chem = CHEMISTRY_LIMITS.get(bt.name) if bt else None
+    specific: tuple[float, float] | None
+    if setting.key in _CELL_VOLTAGE_KEYS:
+        if chem is None:
+            return None, "needs_battery_type"
+        specific = {
+            "cell_ov": chem.cell_ov,
+            "cell_uv": chem.cell_uv,
+            "balance_start_v": chem.balance_start,
+            "cell_nominal": chem.cell_nominal,
+        }[setting.key]
+    elif setting.key in _PACK_VOLTAGE_KEYS:
+        if chem is None:
+            return None, "needs_battery_type"
+        n = safety_cell_count(current, live_cells)
+        if n is None:
+            return None, "needs_cell_count"
+        specific = (chem.cell_uv[0] * n, chem.cell_ov[1] * n)
+    elif setting.key == "charge_ut":
+        specific = (chem or CHEMISTRY_LIMITS["LFP"]).charge_ut
+    else:
+        specific = TEMPERATURE_LIMITS.get(setting.key)
+    if specific is None:
+        return (setting.min, setting.max), None
+    return (max(setting.min, specific[0]), min(setting.max, specific[1])), None
+
+
+def validate(
+    setting: Setting, value: str | float | int, current: BmsSettings, live_cells: int | None = None
+) -> ValidationResult:
+    """Kotlin の Setting.validate() と同じ確認（安全範囲・電圧の大小関係・解除値との関係・16bit に収まるか）"""
     if not setting.editable:
         return ValidationResult("not_editable")
     v = parse_number(value)
     if v is None:
         return ValidationResult("not_a_number")
-    fmin, fmax = setting.format(setting.min), setting.format(setting.max)
-    if v < setting.min - 1e-9 or v > setting.max + 1e-9:
+    rng, blocked = safe_range(setting, current, live_cells)
+    if blocked is not None or rng is None:
+        return ValidationResult(blocked or "not_editable")
+    lo, hi = rng
+    fmin, fmax = setting.format(lo), setting.format(hi)
+    if v < lo - 1e-9 or v > hi + 1e-9:
         return ValidationResult("out_of_range", min=fmin, max=fmax)
+    # 電圧の大小関係: セル過電圧 > 均等化開始電圧 > セル低電圧
+    def other(key: str) -> tuple[Setting, float | None]:
+        o = SETTINGS_BY_KEY[key]
+        return o, current.get(o)
+
+    checks: list[tuple[str, str]] = {
+        "cell_ov": [("balance_start_v", "above")],
+        "cell_uv": [("balance_start_v", "below")],
+        "balance_start_v": [("cell_ov", "below"), ("cell_uv", "above")],
+    }.get(setting.key, [])
+    for key, rule in checks:
+        o, ov = other(key)
+        if ov is None:
+            continue
+        if rule == "above" and v <= ov:
+            return ValidationResult("must_be_above_other", other=o.label, other_value=f"{o.format(ov)} {o.unit}")
+        if rule == "below" and v >= ov:
+            return ValidationResult("must_be_below_other", other=o.label, other_value=f"{o.format(ov)} {o.unit}")
     release = current.release(setting)
     if release is not None:
         if setting.release_rule is ReleaseRule.ABOVE_RELEASE and v <= release:

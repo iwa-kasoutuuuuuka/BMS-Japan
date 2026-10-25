@@ -98,7 +98,9 @@ def test_validation():
     assert validate(S["cell_ov"], "3.50", s) == ValidationResult("must_be_above", release="3.550")
     # 低電圧の保護値は解除値 2.70 V より低くないといけない
     assert validate(S["cell_uv"], "2.80", s) == ValidationResult("must_be_below", release="2.700")
-    assert validate(S["charge_ut"], "-10", s) == ValidationResult("ok", raw=-10 + 40)
+    # リン酸鉄では充電の低温保護は 0 ℃ 以上（解除値 5 ℃ より低く）
+    assert validate(S["charge_ut"], "2", s) == ValidationResult("ok", raw=2 + 40)
+    assert validate(S["charge_ut"], "-10", s).kind == "out_of_range"
     assert validate(S["board1_cells"], "8", s).kind == "not_editable"
     assert validate(S["cell_ov"], "nan", s).kind == "not_a_number"
 

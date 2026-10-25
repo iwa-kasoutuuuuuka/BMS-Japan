@@ -69,9 +69,9 @@ bms-japan pack 12:34:56:78:9A:BC 12:34:56:78:9A:BD --mode parallel
 
 ### 書き込みの安全策（CLI・MCP 共通）
 
-1. 項目ごとの安全な範囲を確認（例: セル過電圧 2.0〜4.5 V）。保護値が解除値をまたぐ値（例: 過電圧の保護値 ≤ 解除値）は書き込みません
+1. 電池の種類（リン酸鉄・三元系・チタン酸）とセル数に合わせた安全な範囲を確認（例: リン酸鉄のセル過電圧は 3.40〜3.75 V）。保護値が解除値をまたぐ値や、「セル過電圧 > 均等化開始電圧 > セル低電圧」を満たさない値は書き込みません
 2. BMS のパスワードが初期値 `123456` から変わっていれば、正しいパスワードが必要です（元アプリと同じく、BMS から読んだパスワードと照合します）
-3. `--yes`（MCP では `confirm: true`）が無いと書き込まず、書き込む予定の内容だけを表示します。CLI は画面から実行したときだけ `y/N` で確認します
+3. `--yes`（MCP では `confirm: true` と `confirm_token`）が無いと書き込まず、書き込む予定の内容だけを表示します。CLI は画面から実行したときだけ `y/N` で確認します。MCP では、プレビューで返る `confirm_token`（同じ内容・120 秒以内・1 回限り）が無いと書き込めません
 4. 書き込み後に読み直して、一致したか（`verified`）を表示します
 
 ### 文字化けするとき
@@ -110,7 +110,7 @@ MCP サーバーのデモはプロセスが動いている間だけ残ります�
 | `get_history` | 故障履歴（`page`, `pages`。`next_page` が null なら終わり） |
 | `get_actual_capacity` | 実容量 |
 | `get_pack_summary` | 複数台のまとめ（parallel / series） |
-| `set_setting` / `set_switch` / `set_battery_type` / `change_password` / `set_actual_capacity` | 書き込み。**`confirm: true` が必要**。初期値以外のパスワードなら `password` も必要 |
+| `set_setting` / `set_switch` / `set_battery_type` / `change_password` / `set_actual_capacity` | 書き込み。まず `confirm` なしで呼んでプレビューと `confirm_token` を受け取り、利用者の同意を得てから **`confirm: true` と `confirm_token`** を付けて呼ぶ。初期値以外のパスワードなら `password` も必要 |
 
 `address` を省略すると、接続中の 1 台を使います。エラーは `[コード] 日本語メッセージ / English` の形で返ります。
 
@@ -215,3 +215,9 @@ pc/
 ```powershell
 python pc/tools/gen_strings.py app/src/main/res/values/strings.xml pc/src/bms_japan/strings_ja.py
 ```
+
+## MCP のセキュリティ上の注意
+
+- 読み取りのツール（`get_live_data` など）は自動では接続しません。先に `connect` を呼んでください（接続時に BMS へ時刻を書き込むため）
+- 機器名は機器が自由に名乗れる文字列です。制御文字などは取り除いていますが、内容は信用しないでください
+- 書き込み系のツールを、Claude Code や Antigravity で「常に許可」にしないでください
