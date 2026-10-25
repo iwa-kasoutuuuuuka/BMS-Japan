@@ -48,6 +48,9 @@ import androidx.compose.ui.unit.dp
 import jp.bmsjapan.app.R
 import jp.bmsjapan.app.protocol.ActualCapacity
 import jp.bmsjapan.app.protocol.BatteryType
+import jp.bmsjapan.app.protocol.BulkOp
+import jp.bmsjapan.app.protocol.BulkSkip
+import jp.bmsjapan.app.protocol.worstCellVoltages
 import jp.bmsjapan.app.protocol.BmsSettings
 import jp.bmsjapan.app.protocol.LiveData
 import jp.bmsjapan.app.protocol.PasswordChangeCheck
@@ -127,6 +130,9 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
     var changingPassword by remember { mutableStateOf(false) }
     var editingActualCapacity by remember { mutableStateOf(false) }
     val actualCapacity by vm.actualCapacityMah.collectAsState()
+    val bulkCount by vm.bulkTargetCount.collectAsState()
+    val bulk by vm.bulk.collectAsState()
+    var switchToAll by remember { mutableStateOf(false) }
 
     val s = settings
     Column(Modifier.fillMaxSize()) {
@@ -236,10 +242,12 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
             setting = setting,
             settings = s ?: return@let,
             liveCells = live.cellCount,
+            bulkCount = bulkCount,
             onDismiss = { editing = null },
-            onConfirm = { raw ->
+            onConfirm = { raw, toAll ->
                 editing = null
-                vm.writeSetting(setting, raw)
+                if (toAll) vm.runBulk(BulkOp.SetValue(setting, setting.encoding.decode(raw)))
+                else vm.writeSetting(setting, raw)
             },
         )
     }
@@ -248,14 +256,22 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
         AlertDialog(
             onDismissRequest = { confirmSwitch = null },
             title = { Text(stringResource(sw.label)) },
-            text = { Text(stringResource(if (on) sw.confirmOn else sw.confirmOff)) },
+            text = {
+                Column {
+                    Text(stringResource(if (on) sw.confirmOn else sw.confirmOff))
+                    if (bulkCount > 1) ApplyToAllRow(bulkCount, switchToAll) { switchToAll = it }
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmSwitch = null
-                    vm.setSwitch(sw, on)
+                    if (switchToAll) vm.runBulk(BulkOp.Switch(sw, on)) else vm.setSwitch(sw, on)
+                    switchToAll = false
                 }) { Text(stringResource(if (on) R.string.action_turn_on else R.string.action_turn_off)) }
             },
-            dismissButton = { TextButton(onClick = { confirmSwitch = null }) { Text(stringResource(R.string.action_cancel)) } },
+            dismissButton = {
+                TextButton(onClick = { confirmSwitch = null; switchToAll = false }) { Text(stringResource(R.string.action_cancel)) }
+            },
         )
     }
 
@@ -286,11 +302,14 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
         RecommendedDialog(
             cellCount = SafetyLimits.cellCount(s, live.cellCount) ?: live.cellCount,
             live = live,
+            bulkCount = bulkCount,
+            allLives = { vm.connectedLives },
             plan = vm::planRecommended,
             onDismiss = { choosingRecommended = false },
-            onConfirm = { preset, plan ->
+            onConfirm = { preset, plan, toAll, ack ->
                 choosingRecommended = false
-                vm.applyRecommended(preset, plan)
+                if (toAll) vm.runBulk(BulkOp.Recommended(preset), acceptImmediateEffect = ack)
+                else vm.applyRecommended(preset, plan)
             },
         )
     }
@@ -299,13 +318,16 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
         BatteryTypeDialog(
             current = s.batteryType,
             cellCount = live.cellCount,
+            bulkCount = bulkCount,
             onDismiss = { choosingBattery = false },
-            onConfirm = { type ->
+            onConfirm = { type, toAll ->
                 choosingBattery = false
-                vm.applyBatteryType(type)
+                if (toAll) vm.runBulk(BulkOp.Battery(type)) else vm.applyBatteryType(type)
             },
         )
     }
+
+    bulk?.let { BulkResultDialog(it, onDismiss = vm::dismissBulk) }
 }
 
 @Composable
@@ -333,7 +355,15 @@ private fun SettingRow(label: String, value: String, caption: String?, enabled: 
 }
 
 @Composable
-private fun EditSettingDialog(setting: Setting, settings: BmsSettings, liveCells: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+private fun EditSettingDialog(
+    setting: Setting,
+    settings: BmsSettings,
+    liveCells: Int,
+    bulkCount: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (raw: Int, toAll: Boolean) -> Unit,
+) {
+    var toAll by remember { mutableStateOf(false) }
     val current = settings[setting]
     // 電池の種類・セル数から決まる、実際に入力できる範囲
     val (range, blocked) = SafetyLimits.rangeFor(setting, settings, liveCells)
@@ -389,12 +419,13 @@ private fun EditSettingDialog(setting: Setting, settings: BmsSettings, liveCells
                         keyboardType = if ((range?.min ?: setting.min) < 0) KeyboardType.Text else KeyboardType.Decimal,
                     ),
                 )
+                if (bulkCount > 1 && blockedText == null) ApplyToAllRow(bulkCount, toAll) { toAll = it }
             }
         },
         confirmButton = {
             TextButton(enabled = blockedText == null, onClick = {
                 when (val r = setting.validate(input, settings, liveCells)) {
-                    is ValidationResult.Ok -> onConfirm(r.raw)
+                    is ValidationResult.Ok -> onConfirm(r.raw, toAll)
                     ValidationResult.NotANumber -> error = notANumber
                     is ValidationResult.OutOfRange -> error = rangeFmt.format(r.min, r.max)
                     is ValidationResult.MustBeAbove -> error = aboveFmt.format(r.release)
@@ -502,8 +533,15 @@ private fun ChangePasswordDialog(onDismiss: () -> Unit, onSubmit: (String, Strin
 }
 
 @Composable
-private fun BatteryTypeDialog(current: BatteryType?, cellCount: Int, onDismiss: () -> Unit, onConfirm: (BatteryType) -> Unit) {
+private fun BatteryTypeDialog(
+    current: BatteryType?,
+    cellCount: Int,
+    bulkCount: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (BatteryType, toAll: Boolean) -> Unit,
+) {
     var selected by remember { mutableStateOf(current) }
+    var toAll by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.label_battery_type)) },
@@ -537,12 +575,14 @@ private fun BatteryTypeDialog(current: BatteryType?, cellCount: Int, onDismiss: 
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
+                if (bulkCount > 1) ApplyToAllRow(bulkCount, toAll) { toAll = it }
             }
         },
         confirmButton = {
             TextButton(
-                enabled = selected != null && selected != current,
-                onClick = { selected?.let(onConfirm) },
+                // 全台に書くときは、開いている台が同じ種類でも他の台が違うことがあるので押せるようにする
+                enabled = selected != null && (selected != current || toAll),
+                onClick = { selected?.let { onConfirm(it, toAll) } },
             ) { Text(stringResource(R.string.action_write)) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
@@ -554,16 +594,21 @@ private fun BatteryTypeDialog(current: BatteryType?, cellCount: Int, onDismiss: 
 private fun RecommendedDialog(
     cellCount: Int,
     live: LiveData,
+    bulkCount: Int,
+    allLives: () -> List<LiveData>,
     plan: (RecommendedPreset) -> PresetPlan?,
     onDismiss: () -> Unit,
-    onConfirm: (RecommendedPreset, PresetPlan) -> Unit,
+    onConfirm: (RecommendedPreset, PresetPlan, toAll: Boolean, acknowledged: Boolean) -> Unit,
 ) {
     var selected by remember { mutableStateOf<RecommendedPreset?>(null) }
     var reviewing by remember { mutableStateOf(false) }
     var acknowledged by remember { mutableStateOf(false) }
+    var toAll by remember { mutableStateOf(false) }
     val current = selected
     val p = if (reviewing && current != null) plan(current) else null
-    val effect = p?.immediateEffect(live.minCellVoltage, live.maxCellVoltage) ?: PresetImmediateEffect.NONE
+    // 全台に書くときは、全台のうちいちばん低い（高い）セル電圧で判定する
+    val (minV, maxV) = if (toAll) worstCellVoltages(allLives()) else live.minCellVoltage to live.maxCellVoltage
+    val effect = p?.immediateEffect(minV, maxV) ?: PresetImmediateEffect.NONE
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(if (current != null && reviewing) current.label else R.string.label_recommended)) },
@@ -605,13 +650,16 @@ private fun RecommendedDialog(
                     }
                     Spacer(Modifier.height(8.dp))
                     Text(stringResource(R.string.recommended_note), style = MaterialTheme.typography.bodySmall)
+                    if (bulkCount > 1) {
+                        ApplyToAllRow(bulkCount, toAll) { toAll = it; acknowledged = false }
+                    }
                     if (effect != PresetImmediateEffect.NONE) {
                         Spacer(Modifier.height(8.dp))
                         Text(
                             if (effect == PresetImmediateEffect.DISCHARGE_STOPS) {
-                                stringResource(R.string.recommended_warn_discharge, "%.3f".format(live.minCellVoltage), "%.2f".format(p.cellUvRelease))
+                                stringResource(R.string.recommended_warn_discharge, "%.3f".format(minV ?: 0.0), "%.2f".format(p.cellUvRelease))
                             } else {
-                                stringResource(R.string.recommended_warn_charge, "%.3f".format(live.maxCellVoltage), "%.2f".format(p.cellOv))
+                                stringResource(R.string.recommended_warn_charge, "%.3f".format(maxV ?: 0.0), "%.2f".format(p.cellOv))
                             },
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
@@ -636,8 +684,9 @@ private fun RecommendedDialog(
                 }
             } else {
                 TextButton(
-                    enabled = p != null && p.changes.isNotEmpty() && (effect == PresetImmediateEffect.NONE || acknowledged),
-                    onClick = { p?.let { onConfirm(current, it) } },
+                    // 全台に書くときは、開いている台で変化が無くても他の台が違うことがあるので押せるようにする
+                    enabled = p != null && (p.changes.isNotEmpty() || toAll) && (effect == PresetImmediateEffect.NONE || acknowledged),
+                    onClick = { p?.let { onConfirm(current, it, toAll, acknowledged) } },
                 ) { Text(stringResource(R.string.action_write)) }
             }
         },
@@ -647,6 +696,79 @@ private fun RecommendedDialog(
             } else {
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
             }
+        },
+    )
+}
+
+/** 「全台に書き込む」のチェック（並列・直列で 2 台以上のときだけ出す） */
+@Composable
+private fun ApplyToAllRow(count: Int, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Column(Modifier.padding(top = 8.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { onChange(!checked) },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = checked, onCheckedChange = onChange)
+            Text(stringResource(R.string.bulk_apply_all, count), style = MaterialTheme.typography.bodyMedium)
+        }
+        if (checked) {
+            Text(
+                stringResource(R.string.bulk_apply_all_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** 全台への書き込みの進み具合と結果 */
+@Composable
+private fun BulkResultDialog(state: BulkState, onDismiss: () -> Unit) {
+    val done = state.rows.count { it.status == BulkStatus.Done }
+    AlertDialog(
+        onDismissRequest = { if (state.finished) onDismiss() },
+        title = { Text(stringResource(R.string.bulk_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (state.finished) {
+                    Text(stringResource(R.string.bulk_summary, state.rows.size, done), fontWeight = FontWeight.Medium)
+                } else {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                Spacer(Modifier.height(8.dp))
+                state.rows.forEach { row ->
+                    val (text, error) = when (val st = row.status) {
+                        BulkStatus.Waiting -> stringResource(R.string.bulk_waiting) to false
+                        BulkStatus.Running -> stringResource(R.string.bulk_running) to false
+                        BulkStatus.Done -> stringResource(R.string.bulk_done) to false
+                        is BulkStatus.Skipped -> stringResource(
+                            when (st.reason) {
+                                BulkSkip.NOT_CONNECTED -> R.string.bulk_skip_not_connected
+                                BulkSkip.PASSWORD -> R.string.bulk_skip_password
+                                BulkSkip.READ_FAILED -> R.string.bulk_skip_read
+                                BulkSkip.OUT_OF_RANGE -> R.string.bulk_skip_range
+                                BulkSkip.BAD_CELLS -> R.string.bulk_skip_cells
+                                BulkSkip.IMMEDIATE_EFFECT -> R.string.bulk_skip_effect
+                                BulkSkip.WRITE_FAILED -> R.string.bulk_skip_write
+                                BulkSkip.VERIFY_FAILED -> R.string.bulk_skip_verify
+                            },
+                        ) to true
+                    }
+                    Column(Modifier.padding(vertical = 4.dp)) {
+                        Text(row.name, fontWeight = FontWeight.Medium)
+                        Text(
+                            text,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = state.finished, onClick = onDismiss) { Text(stringResource(R.string.action_close)) }
         },
     )
 }

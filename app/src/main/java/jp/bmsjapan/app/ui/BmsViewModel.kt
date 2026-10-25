@@ -18,6 +18,10 @@ import jp.bmsjapan.app.data.SavedDevicesCodec
 import jp.bmsjapan.app.data.SavedSetup
 import jp.bmsjapan.app.protocol.ActualCapacity
 import jp.bmsjapan.app.protocol.BatteryType
+import jp.bmsjapan.app.protocol.BulkOp
+import jp.bmsjapan.app.protocol.BulkPlan
+import jp.bmsjapan.app.protocol.BulkSkip
+import jp.bmsjapan.app.protocol.planBulk
 import jp.bmsjapan.app.protocol.PresetPlan
 import jp.bmsjapan.app.protocol.RecommendedPreset
 import jp.bmsjapan.app.protocol.SafetyLimits
@@ -37,6 +41,7 @@ import jp.bmsjapan.app.protocol.SwitchSetting
 import jp.bmsjapan.app.protocol.validateValue
 import jp.bmsjapan.app.protocol.ValidationResult
 import jp.bmsjapan.app.protocol.buildBatteryPreset
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -53,6 +58,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /** 画面下に出す短いメッセージ */
@@ -638,6 +644,94 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- 全台にまとめて書き込む（並列・直列） ----
+
+    /** まとめて書き込める台数（単体のときは 0） */
+    val bulkTargetCount: StateFlow<Int> = combine(_units, _mode) { list, m -> if (m == PackMode.SINGLE) 0 else list.size }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    /** 接続済みでデータが届いている全台の運転データ（おすすめ設定の警告の判定用） */
+    val connectedLives: List<LiveData>
+        get() = unitStatuses.value.filter { it.state == ConnectionState.CONNECTED }.mapNotNull { it.live }
+
+    private val _bulk = MutableStateFlow<BulkState?>(null)
+    val bulk: StateFlow<BulkState?> = _bulk.asStateFlow()
+
+    /** 結果の表示を閉じる（書き込み中は閉じない） */
+    fun dismissBulk() {
+        if (_bulk.value?.finished != false) _bulk.value = null
+    }
+
+    /**
+     * 同じ設定を全台に書き込む。1 台ずつ順番に:
+     * パスワードを確認 → その台の今の設定を読む → その台の設定・セル数で書き込み内容を作り直して安全範囲を確認 → 書き込む → 読み直して確認。
+     * どれかの台で失敗しても、残りの台は続ける（結果は台ごとに表示）。
+     */
+    fun runBulk(op: BulkOp, acceptImmediateEffect: Boolean = false) {
+        if (_access.value !is SettingsAccess.Unlocked || _busy.value) return
+        val targets = _units.value
+        if (_mode.value == PackMode.SINGLE || targets.size < 2) return
+        // 開いている台では、画面と同じ確認を書き込み直前にもう一度
+        if (op is BulkOp.SetValue) {
+            val s = _settings.value ?: return
+            if (op.setting.validateValue(op.value, s, live.value?.cellCount) !is ValidationResult.Ok) {
+                _messages.tryEmit(UiMessage(R.string.msg_write_rejected))
+                return
+            }
+        }
+        val password = devicePassword
+        _bulk.value = BulkState(op, targets.map { BulkRow(it.address, it.name, BulkStatus.Waiting) }, finished = false)
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                for (u in targets) {
+                    setBulkStatus(u.address, BulkStatus.Running)
+                    setBulkStatus(u.address, writeOneUnit(u.connection, op, password, acceptImmediateEffect))
+                }
+            } finally {
+                _busy.value = false
+                _bulk.update { it?.copy(finished = true) }
+            }
+            loadSettings()
+        }
+    }
+
+    private fun setBulkStatus(address: String, status: BulkStatus) {
+        _bulk.update { st -> st?.copy(rows = st.rows.map { if (it.address == address) it.copy(status = status) else it }) }
+    }
+
+    private suspend fun writeOneUnit(c: BmsConnection, op: BulkOp, password: String?, accept: Boolean): BulkStatus {
+        if (c.state.value != ConnectionState.CONNECTED) return BulkStatus.Skipped(BulkSkip.NOT_CONNECTED)
+        var failure = BulkSkip.READ_FAILED
+        return try {
+            c.fastTransfer {
+                val pwd = BmsPassword.decode(c.readRegisters(BmsPassword.START, BmsPassword.COUNT))
+                if (pwd != BmsPassword.DEFAULT && pwd != password) return@fastTransfer BulkStatus.Skipped(BulkSkip.PASSWORD)
+                var s = BmsSettings.EMPTY.merge(BmsSettings.MAIN_START, c.readRegisters(BmsSettings.MAIN_START, BmsSettings.MAIN_COUNT))
+                runCatching { s = s.merge(BmsSettings.BALANCE_START, c.readRegisters(BmsSettings.BALANCE_START, BmsSettings.BALANCE_COUNT)) }
+                val l = c.live.value
+                when (val plan = planBulk(op, s, l?.cellCount, l?.minCellVoltage, l?.maxCellVoltage, accept)) {
+                    is BulkPlan.Rejected -> BulkStatus.Skipped(plan.reason)
+                    is BulkPlan.Ok -> {
+                        failure = BulkSkip.WRITE_FAILED
+                        for (step in plan.steps) {
+                            if (step.values.size == 1) c.writeRegister(step.start, step.values[0])
+                            else c.writeRegisters(step.start, step.values)
+                        }
+                        failure = BulkSkip.VERIFY_FAILED
+                        val verified = plan.steps.all { c.readRegisters(it.start, it.values.size).contentEquals(it.values) }
+                        if (verified) BulkStatus.Done else BulkStatus.Skipped(BulkSkip.VERIFY_FAILED)
+                    }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "bulk write failed: ${e.javaClass.simpleName}")
+            BulkStatus.Skipped(failure)
+        }
+    }
+
     // ---- 故障履歴 ----
     private val _history = MutableStateFlow(HistoryState())
     val history: StateFlow<HistoryState> = _history.asStateFlow()
@@ -725,3 +819,15 @@ data class HistoryState(
     val loading: Boolean = false,
     val error: Boolean = false,
 )
+
+/** まとめて書き込むときの 1 台の状態 */
+sealed interface BulkStatus {
+    data object Waiting : BulkStatus
+    data object Running : BulkStatus
+    data object Done : BulkStatus
+    data class Skipped(val reason: BulkSkip) : BulkStatus
+}
+
+data class BulkRow(val address: String, val name: String, val status: BulkStatus)
+
+data class BulkState(val op: BulkOp, val rows: List<BulkRow>, val finished: Boolean)
