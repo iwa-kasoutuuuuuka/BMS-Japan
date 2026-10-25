@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "bms-japan": {
+      "type": "stdio",
+      "command": "G:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe",
+      "args": ["-m", "bms_japan.mcp_server"],
+      "env": {}
+    },
+    "bms-japan-demo": {
+      "type": "stdio",
+      "command": "G:/100BMS/BMS-Japan/pc/.venv/Scripts/python.exe",
+      "args": ["-m", "bms_japan.mcp_server"],
+      "env": { "BMS_JAPAN_DEMO": "1" }
+    }
+  }
+}

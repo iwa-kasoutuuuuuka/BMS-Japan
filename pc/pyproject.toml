@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bms-japan"
+version = "0.1.0"
+description = "Balance BMS（アクティブバランサー BMS）用の日本語ツール PC 版: CLI と MCP サーバー（非公式）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "See LICENSE in the repository root" }
+dependencies = [
+    "bleak>=0.22",
+    "mcp>=1.2,<3",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+bms-japan = "bms_japan.cli:main"
+bms-japan-mcp = "bms_japan.mcp_server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bms_japan"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

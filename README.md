@@ -54,6 +54,17 @@
 - 書き込み後は BMS からの応答を確認し、設定値を読み直して表示します。
 - 計測ボードのセル数・温度センサー数など、機器の構成に関わる値は表示だけにしています。
 
+## PC版（Claude Code・Antigravity から操作）
+
+`pc/` に Windows / macOS / Linux 用の PC 版があります（Python 3.12、BLE は bleak）。
+
+- **コマンドライン**: `bms-japan live`、`bms-japan settings show`、`bms-japan history` など（日本語表示、`--json` も可）
+- **MCP サーバー**: Claude Code や Antigravity から「BMS の今の状態を見せて」のように操作できます。14 個のツール（スキャン・接続・ライブ・設定・履歴・実容量・まとめ表示、設定の書き込みなど）
+- **デモモード**: `--demo`（MCP は `BMS_JAPAN_DEMO=1`）で、実機なしで試せます
+- 書き込み系のツールは `confirm: true` を付けないと実際には書き込まず、予定内容だけを返します
+
+インストールと登録方法は [pc/README.md](pc/README.md) を見てください。
+
 ## 動作環境
 
 - Android 8.0（API 26）以上、Bluetooth LE 対応の端末
