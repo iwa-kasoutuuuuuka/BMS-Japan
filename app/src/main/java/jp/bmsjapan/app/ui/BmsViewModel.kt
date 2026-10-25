@@ -21,6 +21,11 @@ import jp.bmsjapan.app.protocol.BatteryType
 import jp.bmsjapan.app.protocol.BulkOp
 import jp.bmsjapan.app.protocol.BulkPlan
 import jp.bmsjapan.app.protocol.BulkSkip
+import jp.bmsjapan.app.protocol.CellConditions
+import jp.bmsjapan.app.protocol.PresetImmediateEffect
+import jp.bmsjapan.app.protocol.WriteStep
+import jp.bmsjapan.app.protocol.buildBatteryPresetSteps
+import jp.bmsjapan.app.protocol.immediateEffect
 import jp.bmsjapan.app.protocol.planBulk
 import jp.bmsjapan.app.protocol.PresetPlan
 import jp.bmsjapan.app.protocol.RecommendedPreset
@@ -558,38 +563,54 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         c.writeRegisters(ActualCapacity.REGISTER, ActualCapacity.encode(mAh), Modbus.SLAVE_AUX)
     }
 
+    /** プリセットに使うセル数（設定と運転データのセル数が食い違うときは null） */
+    fun presetCellCount(): Int? = _settings.value?.let { SafetyLimits.presetCellCount(it, live.value?.cellCount) }
+
+    private fun cellCountText(): String {
+        val reg = _settings.value?.raw?.get(130)
+        val l = live.value?.cellCount
+        return if (reg != null && l != null && reg != l) "$reg / $l" else (reg ?: l)?.toString() ?: "--"
+    }
+
     fun applyBatteryType(type: BatteryType) {
         val s = _settings.value ?: return
-        val cells = live.value?.cellCount ?: return
-        val values = buildBatteryPreset(type, cells, s)
-        if (values == null) {
-            // セル数が 0 や 48 超など、BMS から読んだ値がおかしいときは書かない
-            _messages.tryEmit(UiMessage(R.string.msg_preset_bad_cells, cells.toString()))
+        val cells = presetCellCount()
+        // セル数が 0 や 48 超、設定と運転データで食い違う、書き込み後の値が新しい種類の範囲を外れる、のどれかなら書かない
+        val steps = cells?.let { buildBatteryPresetSteps(type, it, s) }
+        if (steps == null) {
+            _messages.tryEmit(UiMessage(R.string.msg_preset_bad_cells, cellCountText()))
             return
         }
-        runWrite { c -> c.writeRegisters(137, values) }
+        runWrite { c -> c.writeSteps(steps) }
     }
 
     /** おすすめ設定の書き込み内容（画面での確認用）。セル数や設定が読めていなければ null */
     fun planRecommended(preset: RecommendedPreset): PresetPlan? {
         val s = _settings.value ?: return null
-        val cells = SafetyLimits.cellCount(s, live.value?.cellCount) ?: return null
+        val cells = presetCellCount() ?: return null
         return buildRecommendedPlan(preset, cells, s)
     }
 
     /**
      * おすすめ設定を書き込む。画面で見せた内容と、書き込む直前の最新の設定から作り直した内容が同じときだけ書く
-     * （間に設定が変わっていたら書かない）。
+     * （間に設定が変わっていたら書かない）。書き込み直後に保護が働くか・電池の種類が変わるかも、ここでもう一度確かめる。
      */
-    fun applyRecommended(preset: RecommendedPreset, shown: PresetPlan) {
+    fun applyRecommended(preset: RecommendedPreset, shown: PresetPlan, acceptImmediateEffect: Boolean, acceptChemistryChange: Boolean) {
         val plan = planRecommended(preset)
-        if (plan == null || plan != shown) {
+        val effect = plan?.immediateEffect(CellConditions.of(live.value))
+        if (plan == null || plan != shown ||
+            (effect != PresetImmediateEffect.NONE && !acceptImmediateEffect) ||
+            (plan.changesChemistry && !acceptChemistryChange)
+        ) {
             _messages.tryEmit(UiMessage(R.string.msg_write_rejected))
             return
         }
-        runWrite { c ->
-            c.writeRegisters(137, plan.block)
-            for ((reg, v) in plan.extra) c.writeRegister(reg, v)
+        runWrite { c -> c.writeSteps(plan.steps) }
+    }
+
+    private suspend fun BmsConnection.writeSteps(steps: List<WriteStep>) {
+        for (st in steps) {
+            if (st.values.size == 1) writeRegister(st.start, st.values[0]) else writeRegisters(st.start, st.values)
         }
     }
 
@@ -627,8 +648,12 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 書き込み → 応答を確認 → 設定を読み直す */
     private fun runWrite(block: suspend (BmsConnection) -> Unit) {
-        val c = _connection.value ?: return
-        if (_access.value !is SettingsAccess.Unlocked || _busy.value) return
+        val c = _connection.value
+        if (c == null || _access.value !is SettingsAccess.Unlocked || _busy.value) {
+            // 何もせずに戻ると、書き込んだと思われてしまうので知らせる
+            _messages.tryEmit(UiMessage(R.string.msg_write_rejected))
+            return
+        }
         viewModelScope.launch {
             _busy.value = true
             try {
@@ -667,10 +692,16 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
      * パスワードを確認 → その台の今の設定を読む → その台の設定・セル数で書き込み内容を作り直して安全範囲を確認 → 書き込む → 読み直して確認。
      * どれかの台で失敗しても、残りの台は続ける（結果は台ごとに表示）。
      */
-    fun runBulk(op: BulkOp, acceptImmediateEffect: Boolean = false) {
-        if (_access.value !is SettingsAccess.Unlocked || _busy.value) return
+    fun runBulk(op: BulkOp, acceptImmediateEffect: Boolean = false, acceptChemistryChange: Boolean = false) {
+        if (_access.value !is SettingsAccess.Unlocked || _busy.value) {
+            _messages.tryEmit(UiMessage(R.string.msg_write_rejected))
+            return
+        }
         val targets = _units.value
-        if (_mode.value == PackMode.SINGLE || targets.size < 2) return
+        if (_mode.value == PackMode.SINGLE || targets.size < 2) {
+            _messages.tryEmit(UiMessage(R.string.msg_bulk_unavailable))
+            return
+        }
         // 開いている台では、画面と同じ確認を書き込み直前にもう一度
         if (op is BulkOp.SetValue) {
             val s = _settings.value ?: return
@@ -686,7 +717,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 for (u in targets) {
                     setBulkStatus(u.address, BulkStatus.Running)
-                    setBulkStatus(u.address, writeOneUnit(u.connection, op, password, acceptImmediateEffect))
+                    setBulkStatus(u.address, writeOneUnit(u.connection, op, password, acceptImmediateEffect, acceptChemistryChange))
                 }
             } finally {
                 _busy.value = false
@@ -700,7 +731,13 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         _bulk.update { st -> st?.copy(rows = st.rows.map { if (it.address == address) it.copy(status = status) else it }) }
     }
 
-    private suspend fun writeOneUnit(c: BmsConnection, op: BulkOp, password: String?, accept: Boolean): BulkStatus {
+    private suspend fun writeOneUnit(
+        c: BmsConnection,
+        op: BulkOp,
+        password: String?,
+        acceptEffect: Boolean,
+        acceptChemistry: Boolean,
+    ): BulkStatus {
         if (c.state.value != ConnectionState.CONNECTED) return BulkStatus.Skipped(BulkSkip.NOT_CONNECTED)
         var failure = BulkSkip.READ_FAILED
         return try {
@@ -709,15 +746,14 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
                 if (pwd != BmsPassword.DEFAULT && pwd != password) return@fastTransfer BulkStatus.Skipped(BulkSkip.PASSWORD)
                 var s = BmsSettings.EMPTY.merge(BmsSettings.MAIN_START, c.readRegisters(BmsSettings.MAIN_START, BmsSettings.MAIN_COUNT))
                 runCatching { s = s.merge(BmsSettings.BALANCE_START, c.readRegisters(BmsSettings.BALANCE_START, BmsSettings.BALANCE_COUNT)) }
+                // 判定に使うセル電圧・温度は、書き込む直前に読み直す（古い値や、まだ届いていない台で判定をすり抜けないように）
+                runCatching { c.refreshLive() }
                 val l = c.live.value
-                when (val plan = planBulk(op, s, l?.cellCount, l?.minCellVoltage, l?.maxCellVoltage, accept)) {
+                when (val plan = planBulk(op, s, l?.cellCount, CellConditions.of(l), acceptEffect, acceptChemistry)) {
                     is BulkPlan.Rejected -> BulkStatus.Skipped(plan.reason)
                     is BulkPlan.Ok -> {
                         failure = BulkSkip.WRITE_FAILED
-                        for (step in plan.steps) {
-                            if (step.values.size == 1) c.writeRegister(step.start, step.values[0])
-                            else c.writeRegisters(step.start, step.values)
-                        }
+                        c.writeSteps(plan.steps)
                         failure = BulkSkip.VERIFY_FAILED
                         val verified = plan.steps.all { c.readRegisters(it.start, it.values.size).contentEquals(it.values) }
                         if (verified) BulkStatus.Done else BulkStatus.Skipped(BulkSkip.VERIFY_FAILED)

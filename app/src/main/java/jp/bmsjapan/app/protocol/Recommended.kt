@@ -67,26 +67,73 @@ data class PresetChange(val setting: Setting?, @param:StringRes val label: Int, 
 data class PresetPlan(
     /** 137 から 27 レジスタ（電池の種類・電圧・電流・温度・均等化開始電圧） */
     val block: IntArray,
-    /** 137〜163 の後に 1 つずつ書くレジスタ（164 = 均等化を始める電圧差、129 = 公称電圧） */
+    /** 1 つずつ書くレジスタ（164 = 均等化を始める電圧差、129 = 公称電圧） */
     val extra: List<Pair<Int, Int>>,
     val changes: List<PresetChange>,
-    /** 書き込み後のセル低電圧の解除値・セル過電圧の保護値（V）。今のセル電圧との比較に使う */
-    val cellUvRelease: Double,
-    val cellOv: Double,
+    val preset: RecommendedPreset,
+    /** 書き込み前の電池の種類（読めなければ null） */
+    val fromType: BatteryType?,
 ) {
     val balanceDiffRaw: Int get() = extra.first { it.first == 164 }.second
+
+    /** 電池の種類が変わる（例: リン酸鉄 → 三元系）。セルの種類を利用者に確かめてもらう */
+    val changesChemistry: Boolean get() = fromType != preset.type
+
+    /** 書き込む順番。1 つずつ書くレジスタを先に、電池の種類を含む一括書き込みを最後にする（途中で失敗しても種類だけ変わった状態にしない） */
+    val steps: List<WriteStep> get() = extra.map { (reg, v) -> WriteStep(reg, intArrayOf(v)) } + WriteStep(137, block)
+
     override fun equals(other: Any?) = other is PresetPlan && block.contentEquals(other.block) &&
-        extra == other.extra && changes == other.changes
+        extra == other.extra && changes == other.changes && preset == other.preset && fromType == other.fromType
     override fun hashCode() = block.contentHashCode() * 31 + extra.hashCode()
 }
 
-/** 今のセル電圧で、書き込んだ直後に保護が働いてしまうかどうか */
-enum class PresetImmediateEffect { NONE, DISCHARGE_STOPS, CHARGE_STOPS }
+/** 書き込み直後に保護が働くかの判定に使う、今の状態。読めていない値は null */
+data class CellConditions(val minCellV: Double?, val maxCellV: Double?, val minTemp: Int?, val maxTemp: Int?) {
+    companion object {
+        val UNKNOWN = CellConditions(null, null, null, null)
 
-fun PresetPlan.immediateEffect(minCellV: Double?, maxCellV: Double?): PresetImmediateEffect = when {
-    minCellV != null && minCellV > 0.5 && minCellV < cellUvRelease -> PresetImmediateEffect.DISCHARGE_STOPS
-    maxCellV != null && maxCellV >= cellOv -> PresetImmediateEffect.CHARGE_STOPS
-    else -> PresetImmediateEffect.NONE
+        fun of(live: LiveData?): CellConditions {
+            if (live == null) return UNKNOWN
+            val temps = live.temperatureSensorCount > 0
+            return CellConditions(
+                live.minCellVoltage.takeIf { it > 0.5 },
+                live.maxCellVoltage.takeIf { it > 0.5 },
+                live.minTemperature.takeIf { temps },
+                live.maxTemperature.takeIf { temps },
+            )
+        }
+
+        /** 全台のうち、いちばん厳しい値（最低の最低値・最高の最高値）。読めていない台は除く */
+        fun worst(lives: List<LiveData>): CellConditions {
+            val all = lives.map(::of)
+            return CellConditions(
+                all.mapNotNull { it.minCellV }.minOrNull(),
+                all.mapNotNull { it.maxCellV }.maxOrNull(),
+                all.mapNotNull { it.minTemp }.minOrNull(),
+                all.mapNotNull { it.maxTemp }.maxOrNull(),
+            )
+        }
+    }
+}
+
+/** 今のセル電圧・温度で、書き込んだ直後に保護が働いてしまうかどうか */
+enum class PresetImmediateEffect { NONE, DISCHARGE_STOPS, CHARGE_STOPS, DISCHARGE_STOPS_TEMP, CHARGE_STOPS_TEMP }
+
+/**
+ * 新しい「解除値」と比べる（保護値と解除値の間にいると、すでに保護が働いている台では解除されないため、控えめに判定する）。
+ * 放電が止まる方を先に判定する（影響が大きいため）。
+ */
+fun PresetPlan.immediateEffect(c: CellConditions): PresetImmediateEffect {
+    val p = preset
+    return when {
+        c.minCellV != null && c.minCellV < p.cellUvRelease -> PresetImmediateEffect.DISCHARGE_STOPS
+        (c.minTemp != null && c.minTemp < p.dischargeUtRelease) || (c.maxTemp != null && c.maxTemp > p.dischargeOtRelease) ->
+            PresetImmediateEffect.DISCHARGE_STOPS_TEMP
+        c.maxCellV != null && c.maxCellV > p.cellOvRelease -> PresetImmediateEffect.CHARGE_STOPS
+        (c.minTemp != null && c.minTemp < p.chargeUtRelease) || (c.maxTemp != null && c.maxTemp > p.chargeOtRelease) ->
+            PresetImmediateEffect.CHARGE_STOPS_TEMP
+        else -> PresetImmediateEffect.NONE
+    }
 }
 
 /**
@@ -151,5 +198,5 @@ fun buildRecommendedPlan(preset: RecommendedPreset, cellCount: Int, current: Bms
             changes += PresetChange(s, R.string.preset_release_of, rb?.let { "${s.format(it)} ${s.unit}" } ?: "--", "${s.format(ra)} ${s.unit}")
         }
     }
-    return PresetPlan(values, listOf(164 to diffRaw, 129 to nominalRaw), changes, preset.cellUvRelease, preset.cellOv)
+    return PresetPlan(values, listOf(164 to diffRaw, 129 to nominalRaw), changes, preset, beforeType)
 }

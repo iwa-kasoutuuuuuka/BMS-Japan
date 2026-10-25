@@ -154,14 +154,14 @@ class SwitchSetting(Enum):
 
 
 class BatteryType(Enum):
-    """値 = (コード, ラベル, セル過電圧解除, 保護, セル低電圧解除, 保護, 均等化開始電圧)
+    """値 = (コード, ラベル, セル過電圧解除, 保護, セル低電圧解除, 保護, 均等化開始電圧, 公称電圧)
 
     均等化開始電圧: 元アプリは種類によらず 3.0 V を書くが、チタン酸では過電圧より高くなってしまうため種類ごとに決める
     """
 
-    LFP = (0, "battery_lfp", 3.55, 3.60, 2.65, 2.60, 3.40)
-    NCM = (1, "battery_ncm", 4.10, 4.20, 2.85, 2.82, 3.90)
-    LTO = (2, "battery_lto", 2.65, 2.70, 1.85, 1.80, 2.50)
+    LFP = (0, "battery_lfp", 3.55, 3.60, 2.65, 2.60, 3.40, 3.20)
+    NCM = (1, "battery_ncm", 4.10, 4.20, 2.85, 2.82, 3.90, 3.70)
+    LTO = (2, "battery_lto", 2.65, 2.70, 1.85, 1.80, 2.50, 2.40)
 
     @property
     def code(self) -> int:
@@ -190,6 +190,11 @@ class BatteryType(Enum):
     @property
     def balance_start(self) -> float:
         return self.value[6]
+
+    @property
+    def nominal(self) -> float:
+        """セルの公称電圧。今の値がその種類の範囲外のときだけ書き換える"""
+        return self.value[7]
 
     def available_for(self, cell_count: int) -> bool:
         """元アプリと同じ条件: 20 セルを超えると三元系、6 セル未満だとチタン酸は選べない"""
@@ -354,6 +359,19 @@ def safety_cell_count(current: BmsSettings, live_cells: int | None) -> int | Non
     return None
 
 
+def preset_cell_count(current: BmsSettings, live_cells: int | None) -> int | None:
+    """プリセットに使うセル数。設定（130）と運転データのセル数がどちらも読めて食い違うときは None
+    （大きい方で計算すると、総電圧の保護が実質効かなくなるため）"""
+
+    def ok(n: int | None) -> int | None:
+        return n if n is not None and MIN_PRESET_CELLS <= n <= MAX_PRESET_CELLS else None
+
+    reg, live = ok(current.raw.get(130)), ok(live_cells)
+    if reg is not None and live is not None and reg != live:
+        return None
+    return reg if reg is not None else live
+
+
 def safe_range(setting: Setting, current: BmsSettings, live_cells: int | None = None) -> tuple[tuple[float, float] | None, str | None]:
     """その項目に入力できる範囲（基本の範囲と、電池の種類・セル数から決まる範囲の重なり）。
     決められないときは (None, 理由の kind) を返す。"""
@@ -480,6 +498,48 @@ def build_battery_preset(btype: BatteryType, cell_count: int, current: BmsSettin
     put(146, pack_deci(btype.cell_uv))
     put(163, mv(btype.balance_start))
     return values
+
+
+#: プリセットの書き込み後に確かめる項目（電池の種類で範囲が変わるもの）
+PRESET_CHECKED_KEYS = ["cell_nominal", "cell_ov", "cell_uv", "pack_ov", "pack_uv", "charge_ut", "balance_start_v"]
+
+
+def build_battery_preset_steps(
+    btype: BatteryType, cell_count: int, current: BmsSettings
+) -> list[tuple[int, list[int]]] | None:
+    """電池の種類を変える書き込みの全体（Kotlin の buildBatteryPresetSteps と同じ）。
+
+    137〜163 の一括書き込みに加えて、新しい種類の範囲から外れる充電の低温保護と公称電圧（129）を直す。
+    書き込み後の状態で、電池の種類によって範囲が変わる項目をすべて確かめ、通らなければ None。
+    1 つずつ書くレジスタを先に、一括書き込みを最後にする。戻り値は [(開始レジスタ, 値の並び), ...]
+    """
+    values = build_battery_preset(btype, cell_count, current)
+    if values is None:
+        return None
+    chem = CHEMISTRY_LIMITS[btype.name]
+    enc = SETTINGS_BY_KEY["charge_ut"].encoding
+    ut = enc.decode(values[154 - PRESET_START])
+    lo, hi = chem.charge_ut
+    if ut < lo or ut > hi:
+        fixed = min(max(ut, lo), hi)
+        values[154 - PRESET_START] = enc.encode(fixed)
+        if enc.decode(values[153 - PRESET_START]) <= fixed:
+            values[153 - PRESET_START] = enc.encode(fixed + 5)
+    extra: list[tuple[int, list[int]]] = []
+    nom_s = SETTINGS_BY_KEY["cell_nominal"]
+    nominal = current.get(nom_s)
+    nlo, nhi = chem.cell_nominal
+    if nominal is None or nominal < nlo - 1e-9 or nominal > nhi + 1e-9:
+        extra.append((nom_s.register, [round_half_up(btype.nominal * 1000)]))
+    after = current.merge(PRESET_START, values)
+    for reg, vals in extra:
+        after = after.merge(reg, vals)
+    for key in PRESET_CHECKED_KEYS:
+        s = SETTINGS_BY_KEY[key]
+        v = after.get(s)
+        if v is None or not validate(s, v, after, cell_count).ok:
+            return None
+    return extra + [(PRESET_START, values)]
 
 
 # ---- 実容量（スレーブ 0x81 のレジスタ 267〜268、32bit、mAh） ----

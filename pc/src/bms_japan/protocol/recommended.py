@@ -92,19 +92,60 @@ CHECKED_KEYS = [
 
 
 @dataclass(frozen=True)
+class CellConditions:
+    """書き込み直後に保護が働くかの判定に使う、今の状態。読めていない値は None"""
+
+    min_cell_v: float | None = None
+    max_cell_v: float | None = None
+    min_temp: int | None = None
+    max_temp: int | None = None
+
+    @staticmethod
+    def of(live: Any) -> "CellConditions":
+        if live is None:
+            return CellConditions()
+        temps = live.temperature_sensor_count > 0
+        return CellConditions(
+            live.min_cell_voltage if live.min_cell_voltage > 0.5 else None,
+            live.max_cell_voltage if live.max_cell_voltage > 0.5 else None,
+            live.min_temperature if temps else None,
+            live.max_temperature if temps else None,
+        )
+
+
+@dataclass(frozen=True)
 class PresetPlan:
     block: list[int]  # 137 から 27 レジスタ
     extra: list[tuple[int, int]]  # 1 つずつ書くレジスタ（164 = 均等化を始める電圧差、129 = 公称電圧）
     changes: list[dict[str, Any]]
-    cell_uv_release: float
-    cell_ov: float
+    preset: "RecommendedPreset"
+    from_type: BatteryType | None
 
-    def immediate_effect(self, min_cell_v: float | None, max_cell_v: float | None) -> str | None:
-        """今のセル電圧で、書き込んだ直後に保護が働くか（discharge_stops / charge_stops / None）"""
-        if min_cell_v is not None and 0.5 < min_cell_v < self.cell_uv_release:
+    @property
+    def changes_chemistry(self) -> bool:
+        return self.from_type is not self.preset.v.type
+
+    @property
+    def steps(self) -> list[tuple[int, list[int]]]:
+        """書き込む順番。1 つずつ書くレジスタを先に、電池の種類を含む一括書き込みを最後にする"""
+        return [(r, [v]) for r, v in self.extra] + [(PRESET_START, self.block)]
+
+    def immediate_effect(self, c: CellConditions) -> str | None:
+        """書き込んだ直後に保護が働くか。新しい解除値と比べる（Kotlin の immediateEffect と同じ）
+        discharge_stops / discharge_stops_temp / charge_stops / charge_stops_temp / None"""
+        p = self.preset.v
+        if c.min_cell_v is not None and c.min_cell_v < p.cell_uv_release:
             return "discharge_stops"
-        if max_cell_v is not None and max_cell_v >= self.cell_ov:
+        if (c.min_temp is not None and c.min_temp < p.discharge_ut_release) or (
+            c.max_temp is not None and c.max_temp > p.discharge_ot_release
+        ):
+            return "discharge_stops_temp"
+        if c.max_cell_v is not None and c.max_cell_v > p.cell_ov_release:
             return "charge_stops"
+        if (c.min_temp is not None and c.min_temp < p.charge_ut_release) or (
+            c.max_temp is not None and c.max_temp > p.charge_ot_release
+        ):
+            return "charge_stops_temp"
         return None
 
 
@@ -173,4 +214,4 @@ def build_recommended_plan(preset: RecommendedPreset, cell_count: int, current: 
         rb, ra = current.release(s), after.release(s)
         if ra is not None and fmt(s, rb) != fmt(s, ra):
             changes.append({"key": key + "_release", "label": s.label + "（解除値）", "before": fmt(s, rb), "after": fmt(s, ra)})
-    return PresetPlan(values, [(164, diff_raw), (129, nominal_raw)], changes, p.cell_uv_release, p.cell_ov)
+    return PresetPlan(values, [(164, diff_raw), (129, nominal_raw)], changes, preset, bt_before)

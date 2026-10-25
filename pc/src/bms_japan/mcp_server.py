@@ -289,7 +289,9 @@ async def set_battery_type(
 @tool(
     description="おすすめ設定（日産リーフなど）をまとめて書き込む。電池の種類・セル/総電圧の保護値・温度の保護値・均等化・公称電圧が変わる（電流は変えない）。"
     "まず confirm なしで呼んで変更点と confirm_token を受け取り、利用者に変更点を見せて同意を得てから confirm=true と confirm_token を付けて呼ぶ。"
-    "今のセル電圧で書き込み直後に保護が働く場合（warning あり）は、利用者が理解したうえで accept_immediate_effect=true も必要。"
+    "今のセル電圧・温度で書き込み直後に保護が働く場合（warning あり）は accept_immediate_effect=true、"
+    "電池の種類が変わる場合（chemistry_warning あり）は利用者にセルの種類を確かめてもらってから accept_chemistry_change=true が必要。"
+    "了承の指定はプレビューの時点から付けること（確認トークンに結びつくため）。"
     " Apply a recommended preset (e.g. Nissan Leaf modules). Requires confirm=true and confirm_token from the preview.",
     **_ann(False, destructive=True, title="おすすめ設定 / Recommended preset"),
 )
@@ -298,11 +300,15 @@ async def set_recommended_preset(
     confirm: Confirm = False,
     confirm_token: ConfirmToken = None,
     accept_immediate_effect: Annotated[bool, Field(description="書き込み直後に放電・充電が止まることを利用者が了承した場合だけ true")] = False,
+    accept_chemistry_change: Annotated[
+        bool, Field(description="電池の種類が変わる（例: リン酸鉄→三元系）ことと、セルがリーフであることを利用者が確認した場合だけ true")
+    ] = False,
     password: Password = None,
     address: Address = None,
 ) -> dict[str, Any]:
     return await svc.set_recommended_preset(
-        manager(), preset, password, confirm, address, confirm_token=confirm_token, accept_immediate_effect=accept_immediate_effect,
+        manager(), preset, password, confirm, address, confirm_token=confirm_token,
+        accept_immediate_effect=accept_immediate_effect, accept_chemistry_change=accept_chemistry_change,
     )
 
 

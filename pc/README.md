@@ -42,7 +42,7 @@ py -3.12 -m venv .venv
 | `bms-japan settings set KEY VALUE [--password P] [--yes]` | 設定値を 1 つ変更 |
 | `bms-japan switch charge\|discharge\|balance on\|off [--yes]` | 充電MOS・放電MOS・均等化の ON/OFF |
 | `bms-japan battery-type lfp\|ncm\|lto [--yes]` | 電池の種類（保護値がまとめて変わります） |
-| `bms-japan recommended leaf-standard\|leaf-long-life [--yes] [--accept-immediate-effect]` | おすすめ設定（日産リーフ）。保護値・温度・均等化・公称電圧がまとめて変わります（電流は変えません）。今のセル電圧で書き込むとすぐ放電・充電が止まる場合は、`--accept-immediate-effect` が無いと書き込みません |
+| `bms-japan recommended leaf-standard\|leaf-long-life [--yes] [--accept-immediate-effect] [--accept-chemistry-change]` | おすすめ設定（日産リーフ）。保護値・温度・均等化・公称電圧がまとめて変わります（電流は変えません）。今のセル電圧・温度で書き込むとすぐ放電・充電が止まる場合は `--accept-immediate-effect`、電池の種類が変わる場合（例: リン酸鉄 → 三元系）はセルがリーフであることを確かめたうえで `--accept-chemistry-change` が無いと書き込みません |
 | `bms-japan password change [--old X --new Y] [--yes]` | パスワード変更（6 桁の数字） |
 | `bms-japan history [--page 0] [--pages 4] [--all]` | 故障履歴（1 ページ 7 件） |
 | `bms-japan capacity show` / `capacity set AH [--yes]` | 実容量（Ah） |
@@ -222,3 +222,4 @@ python pc/tools/gen_strings.py app/src/main/res/values/strings.xml pc/src/bms_ja
 - 読み取りのツール（`get_live_data` など）は自動では接続しません。先に `connect` を呼んでください（接続時に BMS へ時刻を書き込むため）
 - 機器名は機器が自由に名乗れる文字列です。制御文字などは取り除いていますが、内容は信用しないでください
 - 書き込み系のツールを、Claude Code や Antigravity で「常に許可」にしないでください
+- `set_recommended_preset` の `accept_immediate_effect` / `accept_chemistry_change` は確認トークンに結びつきます。プレビューの時点から付けて呼び、利用者が警告を読んで同意してから書き込んでください

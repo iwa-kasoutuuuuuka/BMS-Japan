@@ -284,7 +284,9 @@ async def _dispatch(mgr: ConnectionManager, args: argparse.Namespace) -> int:
         return await run_write(
             args,
             lambda ok: svc.set_recommended_preset(
-                mgr, args.preset, pw, ok, address, accept_immediate_effect=args.accept_immediate_effect
+                mgr, args.preset, pw, ok, address,
+                accept_immediate_effect=args.accept_immediate_effect,
+                accept_chemistry_change=args.accept_chemistry_change,
             ),
         )
 
@@ -362,7 +364,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--accept-immediate-effect",
         action="store_true",
-        help="今のセル電圧で書き込み直後に放電・充電が止まる場合でも書き込む",
+        help="今のセル電圧・温度で書き込み直後に放電・充電が止まる場合でも書き込む",
+    )
+    s.add_argument(
+        "--accept-chemistry-change",
+        action="store_true",
+        help="電池の種類が変わる（例: リン酸鉄→三元系）場合に、セルがリーフであることを確認したうえで書き込む",
     )
 
     s = sub.add_parser("password", help="BMS のパスワードを変更する")

@@ -102,10 +102,12 @@ enum class BatteryType(
     val cellOvRelease: Double, val cellOv: Double, val cellUvRelease: Double, val cellUv: Double,
     /** 均等化を始める電圧。元アプリは種類によらず 3.0 V を書くが、チタン酸では過電圧より高くなってしまうため種類ごとに決める */
     val balanceStart: Double,
+    /** セルの公称電圧。今の値がその種類の範囲外のときだけ書き換える */
+    val nominal: Double,
 ) {
-    LFP(0, R.string.battery_lfp, 3.55, 3.60, 2.65, 2.60, 3.40),
-    NCM(1, R.string.battery_ncm, 4.10, 4.20, 2.85, 2.82, 3.90),
-    LTO(2, R.string.battery_lto, 2.65, 2.70, 1.85, 1.80, 2.50),
+    LFP(0, R.string.battery_lfp, 3.55, 3.60, 2.65, 2.60, 3.40, 3.20),
+    NCM(1, R.string.battery_ncm, 4.10, 4.20, 2.85, 2.82, 3.90, 3.70),
+    LTO(2, R.string.battery_lto, 2.65, 2.70, 1.85, 1.80, 2.50, 2.40),
     ;
 
     /** 元アプリと同じ条件: 20 セルを超えると三元系、6 セル未満だとチタン酸は選べない */
@@ -209,6 +211,18 @@ object SafetyLimits {
             ?: liveCells?.takeIf { it in MIN_PRESET_CELLS..MAX_PRESET_CELLS }
 
     /**
+     * 電池の種類・おすすめ設定のプリセットに使うセル数。
+     * 設定のセル数（レジスタ 130）と運転データのセル数がどちらも読めていて食い違うときは、どちらが正しいか分からないので null
+     * （大きい方で計算すると、総電圧の保護が実質効かなくなるため）。
+     */
+    fun presetCellCount(current: BmsSettings, liveCells: Int?): Int? {
+        val reg = current.raw[130]?.takeIf { it in MIN_PRESET_CELLS..MAX_PRESET_CELLS }
+        val live = liveCells?.takeIf { it in MIN_PRESET_CELLS..MAX_PRESET_CELLS }
+        if (reg != null && live != null && reg != live) return null
+        return reg ?: live
+    }
+
+    /**
      * その項目に入力できる範囲。項目の基本の範囲と、電池の種類・セル数から決まる範囲の重なり。
      * 電池の種類やセル数が分からず決められないときは、その理由を返す。
      */
@@ -299,6 +313,45 @@ fun buildBatteryPreset(type: BatteryType, cellCount: Int, current: BmsSettings):
     set(145, packDeci(type.cellUvRelease)); set(146, packDeci(type.cellUv))
     set(163, mv(type.balanceStart))
     return values
+}
+
+/** プリセットの書き込み後に確かめる項目（電池の種類で範囲が変わるもの） */
+internal val PRESET_CHECKED = listOf(
+    Setting.CELL_NOMINAL, Setting.CELL_OV, Setting.CELL_UV, Setting.PACK_OV, Setting.PACK_UV,
+    Setting.CHARGE_UT, Setting.BALANCE_START_V,
+)
+
+/**
+ * 電池の種類を変える書き込みの全体。
+ * 元アプリと同じ 137〜163 の一括書き込みに加えて、新しい種類の範囲から外れる値を直す:
+ * - 充電の低温保護（例: チタン酸の −20 ℃ のままリン酸鉄にすると、0 ℃ 未満で充電できてしまう）
+ * - 公称電圧（129。範囲外のときだけ）
+ * 書き込み後の状態で、電池の種類によって範囲が変わる項目をすべて確かめ、通らなければ null（書かない）。
+ * 1 つずつ書くレジスタを先に、一括書き込みを最後にする（途中で失敗しても、電池の種類だけ変わった状態にしないため）。
+ */
+fun buildBatteryPresetSteps(type: BatteryType, cellCount: Int, current: BmsSettings): List<WriteStep>? {
+    val values = buildBatteryPreset(type, cellCount, current) ?: return null
+    val chem = SafetyLimits.BY_TYPE.getValue(type)
+    val enc = Setting.CHARGE_UT.encoding
+    val ut = enc.decode(values[154 - 137])
+    if (ut < chem.chargeUt.min || ut > chem.chargeUt.max) {
+        val fixed = ut.coerceIn(chem.chargeUt.min, chem.chargeUt.max)
+        values[154 - 137] = enc.encode(fixed)
+        // 解除値は保護値より高くないといけない
+        if (enc.decode(values[153 - 137]) <= fixed) values[153 - 137] = enc.encode(fixed + 5)
+    }
+    val extra = mutableListOf<WriteStep>()
+    val nominal = current[Setting.CELL_NOMINAL]
+    if (nominal == null || nominal < chem.cellNominal.min - 1e-9 || nominal > chem.cellNominal.max + 1e-9) {
+        extra += WriteStep(Setting.CELL_NOMINAL.register, intArrayOf((type.nominal * 1000).roundToInt()))
+    }
+    var after = current.merge(137, values)
+    for (st in extra) after = after.merge(st.start, st.values)
+    for (s in PRESET_CHECKED) {
+        val v = after[s] ?: return null
+        if (s.validateValue(v, after, cellCount) !is ValidationResult.Ok) return null
+    }
+    return extra + WriteStep(137, values)
 }
 
 /**

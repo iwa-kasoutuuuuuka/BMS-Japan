@@ -116,7 +116,12 @@
     <string name="recommended_unavailable">セル数（%1$d）または今の設定が読めていないため、この設定は使えません。三元系は 20 セルまでです</string>
     <string name="recommended_note">電流の保護値はそのままです（配線・ヒューズに合わせて個別に設定してください）。普段の充電を止める電圧は、充電器・インバーター側でこれより低く（目安: セル 4.05〜4.10 V）設定してください。</string>
     <string name="recommended_warn_discharge">いまのセル電圧（最低 %1$s V）は、新しい「セル低電圧の解除値」%2$s V より低いため、書き込むとすぐに放電が止まります。先に充電してから書き込むことをおすすめします。</string>
-    <string name="recommended_warn_charge">いまのセル電圧（最高 %1$s V）は、新しい「セル過電圧」%2$s V 以上のため、書き込むとすぐに充電が止まります。</string>
+    <string name="recommended_warn_charge">いまのセル電圧（最高 %1$s V）は、新しい「セル過電圧の解除値」%2$s V より高いため、書き込むとすぐに充電が止まることがあります。</string>
+    <string name="recommended_warn_charge_temp">いまの温度（%1$s ℃）は、新しい「充電できる温度」（解除値 %2$d〜%3$d ℃）の外のため、書き込むとすぐに充電が止まることがあります。</string>
+    <string name="recommended_warn_discharge_temp">いまの温度（%1$s ℃）は、新しい「放電できる温度」（解除値 %2$d〜%3$d ℃）の外のため、書き込むとすぐに放電が止まることがあります。</string>
+    <string name="recommended_chem_warn">電池の種類が「%1$s」から「%2$s」に変わり、セル過電圧の保護が %3$s V になります。つながっているセルがリーフ（マンガン系・三元系）でない場合、過充電の保護が効かなくなり危険です。</string>
+    <string name="recommended_chem_ack">つながっているセルがリーフ（マンガン系・三元系）であることを確認した</string>
+    <string name="recommended_chem_bulk_note">他の台は、この台と電池の種類が同じ台だけに書き込みます。</string>
     <string name="recommended_ack">理解したうえで書き込む</string>
     <string name="action_next">次へ</string>
     <string name="bulk_apply_all">全台（%1$d台）に同じ設定を書き込む</string>
@@ -132,6 +137,10 @@
     <string name="bulk_skip_range">この台の今の設定では安全範囲の確認を通らないため、書き込みませんでした（この台の設定画面で確認してください）</string>
     <string name="bulk_skip_cells">セル数が読めない（またはこの種類が選べないセル数の）ため、書き込みませんでした</string>
     <string name="bulk_skip_effect">書き込むとすぐ放電・充電が止まるため、書き込みませんでした</string>
+    <string name="bulk_skip_no_live">セル電圧・温度が読めず、書き込み直後に保護が働くか判定できないため、書き込みませんでした</string>
+    <string name="bulk_skip_chem_mismatch">電池の種類が開いている台と違うため、書き込みませんでした（この台の設定画面で確認してください）</string>
+    <string name="bulk_skip_chem_not_accepted">電池の種類が変わることの確認がないため、書き込みませんでした</string>
+    <string name="msg_bulk_unavailable">全台に書き込むには、並列・直列で2台以上つないでください。書き込みはしていません</string>
     <string name="bulk_skip_write">書き込み中に失敗しました。途中まで書かれた可能性があるので、この台の設定画面で確認してください</string>
     <string name="bulk_skip_verify">書き込み後に読み直した値が違いました。この台の設定画面で確認してください</string>
     <string name="action_demo">デモ</string>
@@ -226,7 +235,7 @@
 
     <!-- 設定: 結果 -->
     <string name="msg_write_ok">設定しました</string>
-    <string name="msg_preset_bad_cells">セル数（%1$s）が正しく読めないため、電池の種類は変更しませんでした</string>
+    <string name="msg_preset_bad_cells">セル数（%1$s）が正しく読めない（設定と運転データで違う場合を含む）か、書き込み後の値が新しい種類の安全範囲を外れるため、電池の種類は変更しませんでした</string>
     <string name="msg_write_failed">設定できませんでした（BMSから応答がありません）</string>
     <string name="msg_read_failed">設定値を読み出せませんでした</string>
 

@@ -50,7 +50,7 @@ import jp.bmsjapan.app.protocol.ActualCapacity
 import jp.bmsjapan.app.protocol.BatteryType
 import jp.bmsjapan.app.protocol.BulkOp
 import jp.bmsjapan.app.protocol.BulkSkip
-import jp.bmsjapan.app.protocol.worstCellVoltages
+import jp.bmsjapan.app.protocol.CellConditions
 import jp.bmsjapan.app.protocol.BmsSettings
 import jp.bmsjapan.app.protocol.LiveData
 import jp.bmsjapan.app.protocol.PasswordChangeCheck
@@ -246,7 +246,7 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
             onDismiss = { editing = null },
             onConfirm = { raw, toAll ->
                 editing = null
-                if (toAll) vm.runBulk(BulkOp.SetValue(setting, setting.encoding.decode(raw)))
+                if (toAll && bulkCount > 1) vm.runBulk(BulkOp.SetValue(setting, setting.encoding.decode(raw)))
                 else vm.writeSetting(setting, raw)
             },
         )
@@ -254,7 +254,8 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
 
     confirmSwitch?.let { (sw, on) ->
         AlertDialog(
-            onDismissRequest = { confirmSwitch = null },
+            // 戻る・外側のタップで閉じたときも「全台」のチェックを戻す（次のダイアログに残らないように）
+            onDismissRequest = { confirmSwitch = null; switchToAll = false },
             title = { Text(stringResource(sw.label)) },
             text = {
                 Column {
@@ -265,7 +266,7 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
             confirmButton = {
                 TextButton(onClick = {
                     confirmSwitch = null
-                    if (switchToAll) vm.runBulk(BulkOp.Switch(sw, on)) else vm.setSwitch(sw, on)
+                    if (switchToAll && bulkCount > 1) vm.runBulk(BulkOp.Switch(sw, on)) else vm.setSwitch(sw, on)
                     switchToAll = false
                 }) { Text(stringResource(if (on) R.string.action_turn_on else R.string.action_turn_off)) }
             },
@@ -300,16 +301,19 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
 
     if (choosingRecommended && s != null) {
         RecommendedDialog(
-            cellCount = SafetyLimits.cellCount(s, live.cellCount) ?: live.cellCount,
+            cellCount = vm.presetCellCount() ?: live.cellCount,
             live = live,
             bulkCount = bulkCount,
             allLives = { vm.connectedLives },
             plan = vm::planRecommended,
             onDismiss = { choosingRecommended = false },
-            onConfirm = { preset, plan, toAll, ack ->
+            onConfirm = { preset, plan, toAll, ack, chemAck ->
                 choosingRecommended = false
-                if (toAll) vm.runBulk(BulkOp.Recommended(preset), acceptImmediateEffect = ack)
-                else vm.applyRecommended(preset, plan)
+                if (toAll && bulkCount > 1) {
+                    vm.runBulk(BulkOp.Recommended(preset, s.batteryType), acceptImmediateEffect = ack, acceptChemistryChange = chemAck)
+                } else {
+                    vm.applyRecommended(preset, plan, ack, chemAck)
+                }
             },
         )
     }
@@ -317,12 +321,12 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
     if (choosingBattery && s != null) {
         BatteryTypeDialog(
             current = s.batteryType,
-            cellCount = live.cellCount,
+            cellCount = vm.presetCellCount() ?: live.cellCount,
             bulkCount = bulkCount,
             onDismiss = { choosingBattery = false },
             onConfirm = { type, toAll ->
                 choosingBattery = false
-                if (toAll) vm.runBulk(BulkOp.Battery(type)) else vm.applyBatteryType(type)
+                if (toAll && bulkCount > 1) vm.runBulk(BulkOp.Battery(type, s.batteryType)) else vm.applyBatteryType(type)
             },
         )
     }
@@ -598,17 +602,18 @@ private fun RecommendedDialog(
     allLives: () -> List<LiveData>,
     plan: (RecommendedPreset) -> PresetPlan?,
     onDismiss: () -> Unit,
-    onConfirm: (RecommendedPreset, PresetPlan, toAll: Boolean, acknowledged: Boolean) -> Unit,
+    onConfirm: (RecommendedPreset, PresetPlan, toAll: Boolean, acknowledged: Boolean, chemistryAcknowledged: Boolean) -> Unit,
 ) {
     var selected by remember { mutableStateOf<RecommendedPreset?>(null) }
     var reviewing by remember { mutableStateOf(false) }
     var acknowledged by remember { mutableStateOf(false) }
     var toAll by remember { mutableStateOf(false) }
+    var chemistryAcknowledged by remember { mutableStateOf(false) }
     val current = selected
     val p = if (reviewing && current != null) plan(current) else null
-    // 全台に書くときは、全台のうちいちばん低い（高い）セル電圧で判定する
-    val (minV, maxV) = if (toAll) worstCellVoltages(allLives()) else live.minCellVoltage to live.maxCellVoltage
-    val effect = p?.immediateEffect(minV, maxV) ?: PresetImmediateEffect.NONE
+    // 全台に書くときは、全台のうちいちばん厳しいセル電圧・温度で判定する
+    val cond = if (toAll) CellConditions.worst(allLives()) else CellConditions.of(live)
+    val effect = p?.immediateEffect(cond) ?: PresetImmediateEffect.NONE
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(if (current != null && reviewing) current.label else R.string.label_recommended)) },
@@ -653,13 +658,48 @@ private fun RecommendedDialog(
                     if (bulkCount > 1) {
                         ApplyToAllRow(bulkCount, toAll) { toAll = it; acknowledged = false }
                     }
-                    if (effect != PresetImmediateEffect.NONE) {
+                    if (p.changesChemistry) {
+                        // 電池の種類が変わると、過充電の保護値が大きく変わる。セルの種類を利用者に確かめてもらう
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            if (effect == PresetImmediateEffect.DISCHARGE_STOPS) {
-                                stringResource(R.string.recommended_warn_discharge, "%.3f".format(minV ?: 0.0), "%.2f".format(p.cellUvRelease))
-                            } else {
-                                stringResource(R.string.recommended_warn_charge, "%.3f".format(maxV ?: 0.0), "%.2f".format(p.cellOv))
+                            stringResource(
+                                R.string.recommended_chem_warn,
+                                p.fromType?.let { stringResource(it.label) } ?: "--",
+                                stringResource(p.preset.type.label),
+                                "%.2f".format(p.preset.cellOv),
+                            ),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        if (toAll && bulkCount > 1) {
+                            Text(stringResource(R.string.recommended_chem_bulk_note), style = MaterialTheme.typography.bodySmall)
+                        }
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { chemistryAcknowledged = !chemistryAcknowledged },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(checked = chemistryAcknowledged, onCheckedChange = { chemistryAcknowledged = it })
+                            Text(stringResource(R.string.recommended_chem_ack), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    if (effect != PresetImmediateEffect.NONE) {
+                        val pr = p.preset
+                        val temps = "${cond.minTemp ?: "--"}〜${cond.maxTemp ?: "--"}"
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            when (effect) {
+                                PresetImmediateEffect.DISCHARGE_STOPS -> stringResource(
+                                    R.string.recommended_warn_discharge, "%.3f".format(cond.minCellV ?: 0.0), "%.2f".format(pr.cellUvRelease),
+                                )
+                                PresetImmediateEffect.CHARGE_STOPS -> stringResource(
+                                    R.string.recommended_warn_charge, "%.3f".format(cond.maxCellV ?: 0.0), "%.2f".format(pr.cellOvRelease),
+                                )
+                                PresetImmediateEffect.DISCHARGE_STOPS_TEMP -> stringResource(
+                                    R.string.recommended_warn_discharge_temp, temps, pr.dischargeUtRelease, pr.dischargeOtRelease,
+                                )
+                                else -> stringResource(R.string.recommended_warn_charge_temp, temps, pr.chargeUtRelease, pr.chargeOtRelease)
                             },
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
@@ -679,14 +719,16 @@ private fun RecommendedDialog(
         },
         confirmButton = {
             if (!reviewing || current == null) {
-                TextButton(enabled = current != null, onClick = { reviewing = true; acknowledged = false }) {
+                TextButton(enabled = current != null, onClick = { reviewing = true; acknowledged = false; chemistryAcknowledged = false }) {
                     Text(stringResource(R.string.action_next))
                 }
             } else {
                 TextButton(
                     // 全台に書くときは、開いている台で変化が無くても他の台が違うことがあるので押せるようにする
-                    enabled = p != null && (p.changes.isNotEmpty() || toAll) && (effect == PresetImmediateEffect.NONE || acknowledged),
-                    onClick = { p?.let { onConfirm(current, it, toAll, acknowledged) } },
+                    enabled = p != null && (p.changes.isNotEmpty() || toAll) &&
+                        (effect == PresetImmediateEffect.NONE || acknowledged) &&
+                        (!p.changesChemistry || chemistryAcknowledged),
+                    onClick = { p?.let { onConfirm(current, it, toAll, acknowledged, chemistryAcknowledged) } },
                 ) { Text(stringResource(R.string.action_write)) }
             }
         },
@@ -751,6 +793,9 @@ private fun BulkResultDialog(state: BulkState, onDismiss: () -> Unit) {
                                 BulkSkip.OUT_OF_RANGE -> R.string.bulk_skip_range
                                 BulkSkip.BAD_CELLS -> R.string.bulk_skip_cells
                                 BulkSkip.IMMEDIATE_EFFECT -> R.string.bulk_skip_effect
+                                BulkSkip.NO_LIVE_DATA -> R.string.bulk_skip_no_live
+                                BulkSkip.CHEMISTRY_MISMATCH -> R.string.bulk_skip_chem_mismatch
+                                BulkSkip.CHEMISTRY_NOT_ACCEPTED -> R.string.bulk_skip_chem_not_accepted
                                 BulkSkip.WRITE_FAILED -> R.string.bulk_skip_write
                                 BulkSkip.VERIFY_FAILED -> R.string.bulk_skip_verify
                             },

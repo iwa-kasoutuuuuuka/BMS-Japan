@@ -26,7 +26,7 @@ from .labels import LIVE_LABELS, t
 from .protocol.history import HistoryRecord
 from .protocol.live import LiveData
 from .protocol.pack import PackMode, PackSummary
-from .protocol.recommended import RecommendedPreset, build_recommended_plan
+from .protocol.recommended import CellConditions, RecommendedPreset, build_recommended_plan
 from .protocol.settings import (
     SETTINGS,
     SETTINGS_BY_KEY,
@@ -37,8 +37,8 @@ from .protocol.settings import (
     PasswordChangeCheck,
     Setting,
     SwitchSetting,
-    build_battery_preset,
-    safety_cell_count,
+    build_battery_preset_steps,
+    preset_cell_count,
     validate,
 )
 from .simulator import DemoRegistry
@@ -612,21 +612,30 @@ async def set_battery_type(
         raise BmsJapanError("unknown_battery_type", f"不明な電池の種類です: {battery_type}（lfp / ncm / lto）") from e
     c = await mgr.client(address)
     live = await _io(c.read_live())
-    n = live.cell_count
+    current = await _io(c.read_settings())
+    n = preset_cell_count(current, live.cell_count)
+    if n is None:
+        raise BmsJapanError(
+            "cell_count_mismatch",
+            f"設定のセル数（{current.raw.get(130)}）と運転データのセル数（{live.cell_count}）が違う（または読めない）ため、書き込みを中止しました",
+        )
     if not bt.available_for(n):
         raise BmsJapanError(
             "battery_type_unavailable",
             f"{n} セルでは {bt.label} は選べません（三元系は 20 セル以下、チタン酸は 6 セル以上）",
         )
-    current = await _io(c.read_settings())
-    values = build_battery_preset(bt, n, current)
-    if values is None:
-        raise BmsJapanError("settings_incomplete", "今の設定値を読み切れなかったため、書き込みを中止しました")
+    steps = build_battery_preset_steps(bt, n, current)
+    if steps is None:
+        raise BmsJapanError(
+            "settings_incomplete", "今の設定値を読み切れなかった（または書き込み後の値が新しい種類の安全範囲を外れる）ため、書き込みを中止しました"
+        )
+    values = steps[-1][1]
     await _check_password(c, password)
     changed = {
-        str(137 + i): {"before": current.raw.get(137 + i), "after": v}
-        for i, v in enumerate(values)
-        if current.raw.get(137 + i) != v
+        str(reg + i): {"before": current.raw.get(reg + i), "after": v}
+        for reg, vals in steps
+        for i, v in enumerate(vals)
+        if current.raw.get(reg + i) != v
     }
     details = {
         "battery_type": bt.name.lower(),
@@ -642,12 +651,13 @@ async def set_battery_type(
         "cell_uv_release": bt.cell_uv_release,
     }
     pre = _gate(
-        mgr, c, "set_battery_type", {"type": bt.name, "values": values}, details,
+        mgr, c, "set_battery_type", {"type": bt.name, "steps": steps}, details,
         f"電池の種類を {bt.label} にします。{t('battery_preset_warning', n)}", confirm, confirm_token,
     )
     if pre is not None:
         return pre
-    await _io(c.write_registers(137, values))
+    for reg, vals in steps:
+        await _io(c.write_registers(reg, vals) if len(vals) > 1 else c.write_register(reg, vals[0]))
     after = await _io(c.read_settings())
     got = [after.raw.get(137 + i) for i in range(len(values))]
     bt_after = after.battery_type
@@ -660,7 +670,7 @@ async def set_battery_type(
             "label": bt_after.label if bt_after else None,
             "values": got,
         },
-        "verified": got == values,
+        "verified": all(after.raw.get(reg + i) == v for reg, vals in steps for i, v in enumerate(vals)),
     }
 
 
@@ -672,8 +682,12 @@ async def set_recommended_preset(
     address: str | None = None,
     confirm_token: str | None = None,
     accept_immediate_effect: bool = False,
+    accept_chemistry_change: bool = False,
 ) -> dict[str, Any]:
     """おすすめ設定（日産リーフなど）をまとめて書き込む。電流の保護値は変えない"""
+    for name, flag in (("accept_immediate_effect", accept_immediate_effect), ("accept_chemistry_change", accept_chemistry_change)):
+        if not isinstance(flag, bool):
+            raise BmsJapanError("invalid_value", f"{name} は true / false で指定してください")
     try:
         rp = RecommendedPreset.from_name(preset)
     except ValueError as e:
@@ -682,7 +696,7 @@ async def set_recommended_preset(
     c = await mgr.client(address)
     live = await _io(c.read_live())
     current = await _io(c.read_settings())
-    n = safety_cell_count(current, live.cell_count)
+    n = preset_cell_count(current, live.cell_count)
     if n is None or not rp.v.type.available_for(n):
         raise BmsJapanError(
             "preset_unavailable",
@@ -692,15 +706,29 @@ async def set_recommended_preset(
     if plan is None:
         raise BmsJapanError("settings_incomplete", "今の設定値を読み切れなかった（または安全範囲の確認を通らなかった）ため、書き込みを中止しました")
     await _check_password(c, password)
-    effect = plan.immediate_effect(live.min_cell_voltage, live.max_cell_voltage)
-    warning = None
-    if effect == "discharge_stops":
-        warning = (
-            f"今のセル電圧（最低 {live.min_cell_voltage:.3f} V）は新しいセル低電圧の解除値 {plan.cell_uv_release:.2f} V より低いため、"
-            "書き込むとすぐに放電が止まります。先に充電することをおすすめします"
+    cond = CellConditions.of(live)
+    effect = plan.immediate_effect(cond)
+    p = rp.v
+    temps = f"{cond.min_temp}〜{cond.max_temp}"
+    warning = {
+        None: None,
+        "discharge_stops": f"今のセル電圧（最低 {live.min_cell_voltage:.3f} V）は新しいセル低電圧の解除値 {p.cell_uv_release:.2f} V より低いため、"
+        "書き込むとすぐに放電が止まります。先に充電することをおすすめします",
+        "discharge_stops_temp": f"今の温度（{temps} ℃）は新しい放電できる温度（解除値 {p.discharge_ut_release}〜{p.discharge_ot_release} ℃）の外のため、"
+        "書き込むとすぐに放電が止まることがあります",
+        "charge_stops": f"今のセル電圧（最高 {live.max_cell_voltage:.3f} V）は新しいセル過電圧の解除値 {p.cell_ov_release:.2f} V より高いため、"
+        "書き込むとすぐに充電が止まることがあります",
+        "charge_stops_temp": f"今の温度（{temps} ℃）は新しい充電できる温度（解除値 {p.charge_ut_release}〜{p.charge_ot_release} ℃）の外のため、"
+        "書き込むとすぐに充電が止まることがあります",
+    }[effect]
+    chemistry_warning = None
+    if plan.changes_chemistry:
+        before = plan.from_type.label if plan.from_type else "不明"
+        chemistry_warning = (
+            f"電池の種類が「{before}」から「{p.type.label}」に変わり、セル過電圧の保護が {p.cell_ov:.2f} V になります。"
+            "つながっているセルがリーフ（マンガン系・三元系）でない場合、過充電の保護が効かなくなり危険です。"
+            "利用者にセルの種類を確かめてもらってください"
         )
-    elif effect == "charge_stops":
-        warning = f"今のセル電圧（最高 {live.max_cell_voltage:.3f} V）は新しいセル過電圧 {plan.cell_ov:.2f} V 以上のため、書き込むとすぐに充電が止まります"
     details = {
         "preset": rp.name.lower(),
         "label": rp.v.label,
@@ -711,19 +739,35 @@ async def set_recommended_preset(
         "extra_registers": {str(r): v for r, v in plan.extra},
         "immediate_effect": effect,
         "warning": warning,
+        "chemistry_change": {"from": plan.from_type.name.lower() if plan.from_type else None, "to": p.type.name.lower()}
+        if plan.changes_chemistry
+        else None,
+        "chemistry_warning": chemistry_warning,
         "note": "電流の保護値はそのままです。普段の充電を止める電圧は、充電器・インバーター側でこれより低く（目安: セル 4.05〜4.10 V）設定してください",
     }
     if effect is not None and confirm and not accept_immediate_effect:
         raise BmsJapanError("immediate_effect", (warning or "") + "。それでも書き込む場合は accept_immediate_effect=true を付けてください")
+    if plan.changes_chemistry and confirm and not accept_chemistry_change:
+        raise BmsJapanError(
+            "chemistry_change", (chemistry_warning or "") + "。確認できた場合だけ accept_chemistry_change=true を付けてください"
+        )
+    # 確認トークンは、警告の有無と了承の指定にも結びつける（プレビューで見せていない了承を後から付けられないように）
     pre = _gate(
-        mgr, c, "set_recommended_preset", {"preset": rp.name, "block": plan.block, "extra": plan.extra}, details,
-        f"おすすめ設定「{rp.v.label}」（{n} セル）を書き込みます。" + (f"注意: {warning}" if warning else ""), confirm, confirm_token,
-    )
+        mgr, c, "set_recommended_preset",
+        {
+            "preset": rp.name, "steps": plan.steps, "effect": effect, "chemistry_change": plan.changes_chemistry,
+            "accept_immediate_effect": accept_immediate_effect, "accept_chemistry_change": accept_chemistry_change,
+        },
+        details,
+        f"おすすめ設定「{p.label}」（{n} セル）を書き込みます。"
+        + (f"注意: {chemistry_warning}" if chemistry_warning else "")
+        + (f"注意: {warning}" if warning else ""),
+        confirm, confirm_token,
+    )  # fmt: skip
     if pre is not None:
         return pre
-    await _io(c.write_registers(137, plan.block))
-    for reg, v in plan.extra:
-        await _io(c.write_register(reg, v))
+    for reg, vals in plan.steps:
+        await _io(c.write_registers(reg, vals) if len(vals) > 1 else c.write_register(reg, vals[0]))
     after = await _io(c.read_settings())
     got = [after.raw.get(137 + i) for i in range(len(plan.block))]
     got_extra = {str(r): after.raw.get(r) for r, _ in plan.extra}

@@ -43,30 +43,69 @@ class BulkWriteTest {
         )
     }
 
+    private fun block(p: BulkPlan) = (p as BulkPlan.Ok).steps.last { it.start == 137 }.values
+
     @Test fun batteryPresetUsesEachUnitsCellCount() {
-        val a = planBulk(BulkOp.Battery(BatteryType.NCM), lfp(7), 7) as BulkPlan.Ok
-        val b = planBulk(BulkOp.Battery(BatteryType.NCM), lfp(8), 8) as BulkPlan.Ok
-        assertEquals(294, a.steps[0].values[144 - 137])   // 4.20 × 7
-        assertEquals(336, b.steps[0].values[144 - 137])   // 4.20 × 8
+        val op = BulkOp.Battery(BatteryType.NCM, expectedType = BatteryType.LFP)
+        assertEquals(294, block(planBulk(op, lfp(7), 7))[144 - 137])   // 4.20 × 7
+        assertEquals(336, block(planBulk(op, lfp(8), 8))[144 - 137])   // 4.20 × 8
         // 三元系は 20 セルまで
-        assertEquals(BulkPlan.Rejected(BulkSkip.BAD_CELLS), planBulk(BulkOp.Battery(BatteryType.NCM), lfp(24), 24))
+        assertEquals(BulkPlan.Rejected(BulkSkip.BAD_CELLS), planBulk(op, lfp(24), 24))
+        // 設定のセル数（7）と運転データのセル数（8）が違う台は書かない
+        assertEquals(BulkPlan.Rejected(BulkSkip.BAD_CELLS), planBulk(op, lfp(7), 8))
     }
+
+    @Test fun batteryPresetSkipsUnitsWithAnotherChemistry() {
+        // 開いている台はリン酸鉄だったが、この台はすでに三元系
+        val ncm = lfp().merge(137, intArrayOf(1))
+        assertEquals(
+            BulkPlan.Rejected(BulkSkip.CHEMISTRY_MISMATCH),
+            planBulk(BulkOp.Battery(BatteryType.LTO, expectedType = BatteryType.LFP), ncm, 7),
+        )
+    }
+
+    @Test fun batteryPresetFixesValuesOutsideTheNewChemistry() {
+        // チタン酸（充電の低温保護 −20 ℃、公称 2.40 V）からリン酸鉄へ
+        val lto = lfp().merge(137, intArrayOf(2)).merge(153, intArrayOf(25, 20)).merge(129, intArrayOf(2400))
+        val steps = (planBulk(BulkOp.Battery(BatteryType.LFP, BatteryType.LTO), lto, 7) as BulkPlan.Ok).steps
+        val b = steps.last().values
+        assertEquals(40, b[154 - 137])          // 0 ℃（リン酸鉄は 0 ℃ 未満で充電しない）
+        assertEquals(45, b[153 - 137])          // 解除値 5 ℃
+        assertEquals(WriteStep(129, intArrayOf(3200)), steps.first())   // 公称電圧も直す（一括書き込みより先に）
+        assertEquals(137, steps.last().start)
+    }
+
+    private fun cond(minV: Double?, maxV: Double?) = CellConditions(minV, maxV, 25, 25)
 
     @Test fun recommendedPresetStopsWhenProtectionWouldTripUnlessAccepted() {
-        val op = BulkOp.Recommended(RecommendedPreset.LEAF_STANDARD)
-        assertEquals(BulkPlan.Rejected(BulkSkip.IMMEDIATE_EFFECT), planBulk(op, lfp(), 7, 2.99, 3.01))
-        val ok = planBulk(op, lfp(), 7, 2.99, 3.01, acceptImmediateEffect = true) as BulkPlan.Ok
-        assertEquals(listOf(137, 164, 129), ok.steps.map { it.start })
-        assertEquals(27, ok.steps[0].values.size)
-        assertTrue(planBulk(op, lfp(), 7, 3.70, 3.75) is BulkPlan.Ok)
+        val op = BulkOp.Recommended(RecommendedPreset.LEAF_STANDARD, expectedType = BatteryType.LFP)
+        assertEquals(BulkPlan.Rejected(BulkSkip.IMMEDIATE_EFFECT), planBulk(op, lfp(), 7, cond(2.99, 3.01), acceptChemistryChange = true))
+        val ok = planBulk(op, lfp(), 7, cond(2.99, 3.01), acceptImmediateEffect = true, acceptChemistryChange = true) as BulkPlan.Ok
+        assertEquals(listOf(164, 129, 137), ok.steps.map { it.start })
+        assertEquals(27, ok.steps.last().values.size)
+        assertTrue(planBulk(op, lfp(), 7, cond(3.70, 3.75), acceptChemistryChange = true) is BulkPlan.Ok)
     }
 
-    @Test fun worstCellVoltagesIgnoresUnitsWithoutData() {
+    @Test fun recommendedPresetNeedsChemistryAcknowledgementAndLiveData() {
+        val op = BulkOp.Recommended(RecommendedPreset.LEAF_STANDARD, expectedType = BatteryType.LFP)
+        // リン酸鉄 → 三元系の変更を了承していない
+        assertEquals(BulkPlan.Rejected(BulkSkip.CHEMISTRY_NOT_ACCEPTED), planBulk(op, lfp(), 7, cond(3.7, 3.75)))
+        // セル電圧が読めない台は、判定できないので書かない
+        assertEquals(
+            BulkPlan.Rejected(BulkSkip.NO_LIVE_DATA),
+            planBulk(op, lfp(), 7, CellConditions.UNKNOWN, acceptChemistryChange = true),
+        )
+        // 種類が違う台は書かない
+        val lto = lfp().merge(137, intArrayOf(2))
+        assertEquals(BulkPlan.Rejected(BulkSkip.CHEMISTRY_MISMATCH), planBulk(op, lto, 7, cond(3.7, 3.75), acceptChemistryChange = true))
+    }
+
+    @Test fun worstConditionsIgnoresUnitsWithoutData() {
         val base = LiveData.parse(IntArray(62))
-        val a = base.copy(minCellVoltage = 3.10, maxCellVoltage = 3.20)
-        val b = base.copy(minCellVoltage = 2.95, maxCellVoltage = 3.30)
-        val empty = base.copy(minCellVoltage = 0.0, maxCellVoltage = 0.0)
-        assertEquals(2.95 to 3.30, worstCellVoltages(listOf(a, b, empty)))
-        assertEquals(null to null, worstCellVoltages(listOf(empty)))
+        val a = base.copy(minCellVoltage = 3.10, maxCellVoltage = 3.20, minTemperature = 10, maxTemperature = 20, temperatureSensorCount = 2)
+        val b = base.copy(minCellVoltage = 2.95, maxCellVoltage = 3.30, minTemperature = 5, maxTemperature = 30, temperatureSensorCount = 2)
+        val empty = base.copy(minCellVoltage = 0.0, maxCellVoltage = 0.0, temperatureSensorCount = 0)
+        assertEquals(CellConditions(2.95, 3.30, 5, 30), CellConditions.worst(listOf(a, b, empty)))
+        assertEquals(CellConditions.UNKNOWN, CellConditions.worst(listOf(empty)))
     }
 }

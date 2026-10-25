@@ -44,14 +44,36 @@ class RecommendedTest {
         assertEquals(listOf(164 to 15, 129 to 3700), plan.extra)
     }
 
+    private fun cond(minV: Double?, maxV: Double?, minT: Int? = 25, maxT: Int? = 25) = CellConditions(minV, maxV, minT, maxT)
+
     @Test fun warnsWhenProtectionWouldTripRightAway() {
         val plan = buildRecommendedPlan(RecommendedPreset.LEAF_STANDARD, 7, lfp7())!!
         // 実機のスクショ: セル 2.99〜3.01 V → 新しい低電圧の解除値 3.20 V より低いので放電が止まる
-        assertEquals(PresetImmediateEffect.DISCHARGE_STOPS, plan.immediateEffect(2.992, 3.006))
-        assertEquals(PresetImmediateEffect.NONE, plan.immediateEffect(3.70, 3.75))
-        assertEquals(PresetImmediateEffect.CHARGE_STOPS, plan.immediateEffect(3.90, 4.16))
-        // 読めていない（0 V）ときは判定しない
-        assertEquals(PresetImmediateEffect.NONE, plan.immediateEffect(0.0, 0.0))
+        assertEquals(PresetImmediateEffect.DISCHARGE_STOPS, plan.immediateEffect(cond(2.992, 3.006)))
+        assertEquals(PresetImmediateEffect.NONE, plan.immediateEffect(cond(3.70, 3.75)))
+        // 過電圧も解除値（4.10 V）と比べる
+        assertEquals(PresetImmediateEffect.CHARGE_STOPS, plan.immediateEffect(cond(3.90, 4.12)))
+        assertEquals(PresetImmediateEffect.NONE, plan.immediateEffect(CellConditions.UNKNOWN))
+    }
+
+    @Test fun warnsAboutTemperature() {
+        val long = buildRecommendedPlan(RecommendedPreset.LEAF_LONG_LIFE, 7, lfp7())!!
+        // 長寿命の充電できる温度は解除値 8〜35 ℃。冬の 2 ℃ や夏の 41 ℃ ではすぐ充電が止まる
+        assertEquals(PresetImmediateEffect.CHARGE_STOPS_TEMP, long.immediateEffect(cond(3.7, 3.8, 2, 5)))
+        assertEquals(PresetImmediateEffect.CHARGE_STOPS_TEMP, long.immediateEffect(cond(3.7, 3.8, 30, 41)))
+        // 放電の高温（解除値 50 ℃）を超えると放電が止まる（こちらを優先して知らせる）
+        assertEquals(PresetImmediateEffect.DISCHARGE_STOPS_TEMP, long.immediateEffect(cond(3.7, 3.8, 30, 52)))
+        assertEquals(PresetImmediateEffect.NONE, long.immediateEffect(cond(3.7, 3.8, 15, 25)))
+        // 温度センサーが無い台は温度で判定しない
+        assertEquals(PresetImmediateEffect.NONE, long.immediateEffect(cond(3.7, 3.8, null, null)))
+    }
+
+    @Test fun chemistryChangeAndWriteOrder() {
+        val plan = buildRecommendedPlan(RecommendedPreset.LEAF_STANDARD, 7, lfp7())!!
+        assertTrue(plan.changesChemistry)
+        assertEquals(BatteryType.LFP, plan.fromType)
+        // 1 つずつ書くレジスタが先、電池の種類を含む一括書き込みが最後
+        assertEquals(listOf(164, 129, 137), plan.steps.map { it.start })
     }
 
     @Test fun everyPresetPassesSafetyChecksForCommonCellCounts() {

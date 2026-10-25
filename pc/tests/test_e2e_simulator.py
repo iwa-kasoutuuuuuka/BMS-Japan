@@ -287,7 +287,12 @@ async def test_recommended_leaf_preset(mgr):
     w = p["would_write"]
     assert w["cell_count"] == 16 and w["immediate_effect"] is None
     assert any(ch["key"] == "battery_type" and ch["after"] == "ncm" for ch in w["changes"])
-    r = await svc.set_recommended_preset(mgr, "leaf-standard", confirm=True, address="DEMO-01")
+    assert w["chemistry_change"] == {"from": "lfp", "to": "ncm"} and w["chemistry_warning"]
+    # 電池の種類が変わるので、セルの種類の確認（accept_chemistry_change）が無いと書かない
+    with pytest.raises(BmsJapanError) as e:
+        await svc.set_recommended_preset(mgr, "leaf-standard", confirm=True, address="DEMO-01")
+    assert e.value.code == "chemistry_change"
+    r = await svc.set_recommended_preset(mgr, "leaf-standard", confirm=True, address="DEMO-01", accept_chemistry_change=True)
     assert r["verified"]
     s = await svc.get_settings(mgr, "DEMO-01")
     vals = {x["key"]: x["value"] for x in s["settings"]}
@@ -303,10 +308,37 @@ async def test_recommended_warns_when_discharge_would_stop(mgr):
     p = await svc.set_recommended_preset(mgr, "leaf_long_life", address="DEMO-01")
     assert p["would_write"]["immediate_effect"] == "discharge_stops"
     with pytest.raises(BmsJapanError) as e:
-        await svc.set_recommended_preset(mgr, "leaf_long_life", confirm=True, address="DEMO-01")
+        await svc.set_recommended_preset(mgr, "leaf_long_life", confirm=True, address="DEMO-01", accept_chemistry_change=True)
     assert e.value.code == "immediate_effect"
-    r = await svc.set_recommended_preset(mgr, "leaf_long_life", confirm=True, address="DEMO-01", accept_immediate_effect=True)
+    r = await svc.set_recommended_preset(
+        mgr, "leaf_long_life", confirm=True, address="DEMO-01", accept_immediate_effect=True, accept_chemistry_change=True
+    )
     assert r["verified"]
+
+
+async def test_recommended_token_binds_acceptance():
+    # 確認トークンは、了承の指定にも結びつく（プレビューで了承を付けていなければ、後から付けても使えない）
+    m = ConnectionManager(ManagerConfig(demo=True, reply_timeout=0.3, require_confirm_token=True))
+    try:
+        p = await svc.set_recommended_preset(m, "leaf_standard", address="DEMO-01")
+        with pytest.raises(BmsJapanError) as e:
+            await svc.set_recommended_preset(
+                m, "leaf_standard", confirm=True, address="DEMO-01", confirm_token=p["confirm_token"], accept_chemistry_change=True
+            )
+        assert e.value.code == "confirm_token_required"
+        p = await svc.set_recommended_preset(m, "leaf_standard", address="DEMO-01", accept_chemistry_change=True)
+        r = await svc.set_recommended_preset(
+            m, "leaf_standard", confirm=True, address="DEMO-01", confirm_token=p["confirm_token"], accept_chemistry_change=True
+        )
+        assert r["verified"]
+    finally:
+        await m.close_all()
+
+
+async def test_recommended_rejects_non_bool_flags(mgr):
+    with pytest.raises(BmsJapanError) as e:
+        await svc.set_recommended_preset(mgr, "leaf_standard", address="DEMO-01", accept_chemistry_change="false")
+    assert e.value.code == "invalid_value"
 
 
 async def test_recommended_unknown_preset(mgr):

@@ -101,6 +101,22 @@ class SettingsTest {
         assertEquals(2 + 4 + 27 * 2 + 2, frame.size)   // バイト数フィールドなし
     }
 
+    @Test fun batteryPresetStepsValidatesResult() {
+        val s = sampleSettings()
+        val steps = buildBatteryPresetSteps(BatteryType.NCM, 13, s)!!
+        assertEquals(137, steps.last().start)
+        // 0 セルは書かない
+        assertNull(buildBatteryPresetSteps(BatteryType.NCM, 0, s))
+    }
+
+    @Test fun presetCellCountRefusesMismatch() {
+        val s = sampleSettings().merge(130, intArrayOf(13))
+        val reg = 13
+        assertEquals(reg, SafetyLimits.presetCellCount(s, reg))
+        assertEquals(reg, SafetyLimits.presetCellCount(s, null))
+        assertNull(SafetyLimits.presetCellCount(s, reg + 1))
+    }
+
     @Test fun presetNeedsAllRegisters() {
         assertNull(buildBatteryPreset(BatteryType.LFP, 16, BmsSettings.EMPTY))
     }
