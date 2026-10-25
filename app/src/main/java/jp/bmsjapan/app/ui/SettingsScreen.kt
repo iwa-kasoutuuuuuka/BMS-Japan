@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -50,6 +51,10 @@ import jp.bmsjapan.app.protocol.BatteryType
 import jp.bmsjapan.app.protocol.BmsSettings
 import jp.bmsjapan.app.protocol.LiveData
 import jp.bmsjapan.app.protocol.PasswordChangeCheck
+import jp.bmsjapan.app.protocol.PresetImmediateEffect
+import jp.bmsjapan.app.protocol.PresetPlan
+import jp.bmsjapan.app.protocol.RecommendedPreset
+import jp.bmsjapan.app.protocol.immediateEffect
 import jp.bmsjapan.app.protocol.SafetyLimits
 import jp.bmsjapan.app.protocol.Setting
 import jp.bmsjapan.app.protocol.SettingGroup
@@ -118,6 +123,7 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
     var editing by remember { mutableStateOf<Setting?>(null) }
     var confirmSwitch by remember { mutableStateOf<Pair<SwitchSetting, Boolean>?>(null) }
     var choosingBattery by remember { mutableStateOf(false) }
+    var choosingRecommended by remember { mutableStateOf(false) }
     var changingPassword by remember { mutableStateOf(false) }
     var editingActualCapacity by remember { mutableStateOf(false) }
     val actualCapacity by vm.actualCapacityMah.collectAsState()
@@ -172,6 +178,14 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
                     caption = stringResource(R.string.battery_type_tap),
                     enabled = !busy,
                     onClick = { choosingBattery = true },
+                )
+                HorizontalDivider()
+                SettingRow(
+                    label = stringResource(R.string.label_recommended),
+                    value = "",
+                    caption = stringResource(R.string.recommended_caption),
+                    enabled = !busy,
+                    onClick = { choosingRecommended = true },
                 )
             }
 
@@ -264,6 +278,19 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
                 val r = vm.changePassword(old, new, repeat)
                 if (r == PasswordChangeCheck.OK) changingPassword = false
                 r
+            },
+        )
+    }
+
+    if (choosingRecommended && s != null) {
+        RecommendedDialog(
+            cellCount = SafetyLimits.cellCount(s, live.cellCount) ?: live.cellCount,
+            live = live,
+            plan = vm::planRecommended,
+            onDismiss = { choosingRecommended = false },
+            onConfirm = { preset, plan ->
+                choosingRecommended = false
+                vm.applyRecommended(preset, plan)
             },
         )
     }
@@ -519,5 +546,107 @@ private fun BatteryTypeDialog(current: BatteryType?, cellCount: Int, onDismiss: 
             ) { Text(stringResource(R.string.action_write)) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
+/** おすすめ設定: 電池を選ぶ → 変わる項目を確認 → 書き込む */
+@Composable
+private fun RecommendedDialog(
+    cellCount: Int,
+    live: LiveData,
+    plan: (RecommendedPreset) -> PresetPlan?,
+    onDismiss: () -> Unit,
+    onConfirm: (RecommendedPreset, PresetPlan) -> Unit,
+) {
+    var selected by remember { mutableStateOf<RecommendedPreset?>(null) }
+    var reviewing by remember { mutableStateOf(false) }
+    var acknowledged by remember { mutableStateOf(false) }
+    val current = selected
+    val p = if (reviewing && current != null) plan(current) else null
+    val effect = p?.immediateEffect(live.minCellVoltage, live.maxCellVoltage) ?: PresetImmediateEffect.NONE
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(if (current != null && reviewing) current.label else R.string.label_recommended)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (!reviewing || current == null) {
+                    Text(stringResource(R.string.recommended_choose, cellCount), style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(4.dp))
+                    RecommendedPreset.entries.forEach { preset ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .selectable(selected = selected == preset, onClick = { selected = preset })
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = selected == preset, onClick = { selected = preset })
+                            Column {
+                                Text(stringResource(preset.label))
+                                Text(stringResource(preset.description), style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                } else if (p == null) {
+                    Text(stringResource(R.string.recommended_unavailable, cellCount), color = MaterialTheme.colorScheme.error)
+                } else {
+                    Text(stringResource(R.string.recommended_changes), style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(4.dp))
+                    if (p.changes.isEmpty()) Text(stringResource(R.string.recommended_no_changes))
+                    p.changes.forEach { ch ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                        ) {
+                            Text(stringResource(ch.label), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                            Text("${ch.before} → ${ch.after}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(stringResource(R.string.recommended_note), style = MaterialTheme.typography.bodySmall)
+                    if (effect != PresetImmediateEffect.NONE) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            if (effect == PresetImmediateEffect.DISCHARGE_STOPS) {
+                                stringResource(R.string.recommended_warn_discharge, "%.3f".format(live.minCellVoltage), "%.2f".format(p.cellUvRelease))
+                            } else {
+                                stringResource(R.string.recommended_warn_charge, "%.3f".format(live.maxCellVoltage), "%.2f".format(p.cellOv))
+                            },
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { acknowledged = !acknowledged },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(checked = acknowledged, onCheckedChange = { acknowledged = it })
+                            Text(stringResource(R.string.recommended_ack), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (!reviewing || current == null) {
+                TextButton(enabled = current != null, onClick = { reviewing = true; acknowledged = false }) {
+                    Text(stringResource(R.string.action_next))
+                }
+            } else {
+                TextButton(
+                    enabled = p != null && p.changes.isNotEmpty() && (effect == PresetImmediateEffect.NONE || acknowledged),
+                    onClick = { p?.let { onConfirm(current, it) } },
+                ) { Text(stringResource(R.string.action_write)) }
+            }
+        },
+        dismissButton = {
+            if (reviewing) {
+                TextButton(onClick = { reviewing = false }) { Text(stringResource(R.string.action_back)) }
+            } else {
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+            }
+        },
     )
 }

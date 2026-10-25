@@ -118,7 +118,7 @@ async def test_battery_type_preset(mgr):
     s = await svc.get_settings(mgr, "DEMO-01")
     vals = {x["key"]: x["value"] for x in s["settings"]}
     assert vals["cell_ov"] == 4.2 and vals["pack_ov"] == pytest.approx(67.2)  # 4.20 × 16
-    assert vals["balance_start_v"] == 3.0
+    assert vals["balance_start_v"] == 3.9  # 三元系の均等化開始電圧
     # 複数書き込みはバイト数フィールドなし: D2 10 0089 001B + 54 バイト + CRC
     frame = next(f for f in sim(mgr).log if f.startswith("D2100089001B"))
     assert len(frame) // 2 == 2 + 4 + 27 * 2 + 2
@@ -278,3 +278,38 @@ def test_frames_are_real_protocol():
     bad[-1] ^= 0xFF
     assert dev.receive(bytes(bad)) == []
     assert len(dev.receive(mb.read_live())) == 1
+
+
+async def test_recommended_leaf_preset(mgr):
+    # デモは 16 セル・リン酸鉄・セル約 3.3 V
+    p = await svc.set_recommended_preset(mgr, "leaf_standard", address="DEMO-01")
+    assert p["dry_run"]
+    w = p["would_write"]
+    assert w["cell_count"] == 16 and w["immediate_effect"] is None
+    assert any(ch["key"] == "battery_type" and ch["after"] == "ncm" for ch in w["changes"])
+    r = await svc.set_recommended_preset(mgr, "leaf-standard", confirm=True, address="DEMO-01")
+    assert r["verified"]
+    s = await svc.get_settings(mgr, "DEMO-01")
+    vals = {x["key"]: x["value"] for x in s["settings"]}
+    assert vals["cell_ov"] == 4.15 and vals["cell_uv"] == 3.0
+    assert vals["pack_ov"] == pytest.approx(66.4)  # 4.15 × 16
+    assert vals["charge_ot"] == 45 and vals["charge_ut"] == 0
+    assert vals["balance_start_v"] == 3.9 and vals["balance_start_diff"] == 0.015
+    assert vals["cell_nominal"] == 3.7
+
+
+async def test_recommended_warns_when_discharge_would_stop(mgr):
+    # 長寿命は低電圧の解除値が 3.45 V。セル約 3.3 V では書き込み直後に放電が止まる
+    p = await svc.set_recommended_preset(mgr, "leaf_long_life", address="DEMO-01")
+    assert p["would_write"]["immediate_effect"] == "discharge_stops"
+    with pytest.raises(BmsJapanError) as e:
+        await svc.set_recommended_preset(mgr, "leaf_long_life", confirm=True, address="DEMO-01")
+    assert e.value.code == "immediate_effect"
+    r = await svc.set_recommended_preset(mgr, "leaf_long_life", confirm=True, address="DEMO-01", accept_immediate_effect=True)
+    assert r["verified"]
+
+
+async def test_recommended_unknown_preset(mgr):
+    with pytest.raises(BmsJapanError) as e:
+        await svc.set_recommended_preset(mgr, "tesla", address="DEMO-01")
+    assert e.value.code == "unknown_preset"

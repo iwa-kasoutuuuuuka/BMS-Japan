@@ -18,6 +18,10 @@ import jp.bmsjapan.app.data.SavedDevicesCodec
 import jp.bmsjapan.app.data.SavedSetup
 import jp.bmsjapan.app.protocol.ActualCapacity
 import jp.bmsjapan.app.protocol.BatteryType
+import jp.bmsjapan.app.protocol.PresetPlan
+import jp.bmsjapan.app.protocol.RecommendedPreset
+import jp.bmsjapan.app.protocol.SafetyLimits
+import jp.bmsjapan.app.protocol.buildRecommendedPlan
 import jp.bmsjapan.app.protocol.Modbus
 import jp.bmsjapan.app.protocol.BmsPassword
 import jp.bmsjapan.app.protocol.BmsSettings
@@ -558,6 +562,29 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         runWrite { c -> c.writeRegisters(137, values) }
+    }
+
+    /** おすすめ設定の書き込み内容（画面での確認用）。セル数や設定が読めていなければ null */
+    fun planRecommended(preset: RecommendedPreset): PresetPlan? {
+        val s = _settings.value ?: return null
+        val cells = SafetyLimits.cellCount(s, live.value?.cellCount) ?: return null
+        return buildRecommendedPlan(preset, cells, s)
+    }
+
+    /**
+     * おすすめ設定を書き込む。画面で見せた内容と、書き込む直前の最新の設定から作り直した内容が同じときだけ書く
+     * （間に設定が変わっていたら書かない）。
+     */
+    fun applyRecommended(preset: RecommendedPreset, shown: PresetPlan) {
+        val plan = planRecommended(preset)
+        if (plan == null || plan != shown) {
+            _messages.tryEmit(UiMessage(R.string.msg_write_rejected))
+            return
+        }
+        runWrite { c ->
+            c.writeRegisters(137, plan.block)
+            for ((reg, v) in plan.extra) c.writeRegister(reg, v)
+        }
     }
 
     /**

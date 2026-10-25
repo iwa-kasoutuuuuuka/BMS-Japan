@@ -117,7 +117,7 @@ def test_battery_preset_ncm():
     assert v[143 - 137] == 533  # 4.10 × 13 × 10
     assert v[144 - 137] == 546
     assert v[148 - 137] == 28000  # 電流は今の値のまま
-    assert v[163 - 137] == 3000
+    assert v[163 - 137] == 3900  # 三元系の均等化開始電圧（元アプリの 3.0 V は直した）
     frame = mb.write_registers(137, v)
     assert len(frame) == 2 + 4 + 27 * 2 + 2  # バイト数フィールドなし
 

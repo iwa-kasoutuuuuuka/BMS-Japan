@@ -97,10 +97,15 @@ enum class SwitchSetting(val register: Int, @param:StringRes val label: Int, @pa
     BALANCE(207, R.string.label_balancing, R.string.confirm_balance_on, R.string.confirm_balance_off),
 }
 
-enum class BatteryType(val code: Int, @param:StringRes val label: Int, val cellOvRelease: Double, val cellOv: Double, val cellUvRelease: Double, val cellUv: Double) {
-    LFP(0, R.string.battery_lfp, 3.55, 3.60, 2.65, 2.60),
-    NCM(1, R.string.battery_ncm, 4.10, 4.20, 2.85, 2.82),
-    LTO(2, R.string.battery_lto, 2.65, 2.70, 1.85, 1.80),
+enum class BatteryType(
+    val code: Int, @param:StringRes val label: Int,
+    val cellOvRelease: Double, val cellOv: Double, val cellUvRelease: Double, val cellUv: Double,
+    /** 均等化を始める電圧。元アプリは種類によらず 3.0 V を書くが、チタン酸では過電圧より高くなってしまうため種類ごとに決める */
+    val balanceStart: Double,
+) {
+    LFP(0, R.string.battery_lfp, 3.55, 3.60, 2.65, 2.60, 3.40),
+    NCM(1, R.string.battery_ncm, 4.10, 4.20, 2.85, 2.82, 3.90),
+    LTO(2, R.string.battery_lto, 2.65, 2.70, 1.85, 1.80, 2.50),
     ;
 
     /** 元アプリと同じ条件: 20 セルを超えると三元系、6 セル未満だとチタン酸は選べない */
@@ -292,7 +297,7 @@ fun buildBatteryPreset(type: BatteryType, cellCount: Int, current: BmsSettings):
     set(141, mv(type.cellUvRelease)); set(142, mv(type.cellUv))
     set(143, packDeci(type.cellOvRelease)); set(144, packDeci(type.cellOv))
     set(145, packDeci(type.cellUvRelease)); set(146, packDeci(type.cellUv))
-    set(163, 3000)
+    set(163, mv(type.balanceStart))
     return values
 }
 

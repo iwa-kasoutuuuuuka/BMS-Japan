@@ -280,6 +280,14 @@ async def _dispatch(mgr: ConnectionManager, args: argparse.Namespace) -> int:
     if cmd == "battery-type":
         return await run_write(args, lambda ok: svc.set_battery_type(mgr, args.type, pw, ok, address))
 
+    if cmd == "recommended":
+        return await run_write(
+            args,
+            lambda ok: svc.set_recommended_preset(
+                mgr, args.preset, pw, ok, address, accept_immediate_effect=args.accept_immediate_effect
+            ),
+        )
+
     if cmd == "password":
         old = args.old or getpass.getpass("今のパスワード: ")
         new = args.new or getpass.getpass("新しいパスワード（6 桁の数字）: ")
@@ -342,6 +350,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("battery-type", parents=[common, write], help="電池の種類を変える（保護値がまとめて変わります）")
     s.add_argument("type", choices=["lfp", "ncm", "lto"])
+
+    s = sub.add_parser(
+        "recommended", parents=[common, write], help="おすすめ設定（日産リーフなど）をまとめて書き込む（電流は変えない）"
+    )
+    s.add_argument(
+        "preset",
+        choices=["leaf-standard", "leaf-long-life"],
+        help="leaf-standard: セル 3.00〜4.15 V / leaf-long-life: セル 3.30〜4.10 V",
+    )
+    s.add_argument(
+        "--accept-immediate-effect",
+        action="store_true",
+        help="今のセル電圧で書き込み直後に放電・充電が止まる場合でも書き込む",
+    )
 
     s = sub.add_parser("password", help="BMS のパスワードを変更する")
     sp = s.add_subparsers(dest="password_cmd", required=True, metavar="change")

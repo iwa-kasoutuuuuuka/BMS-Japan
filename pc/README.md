@@ -42,6 +42,7 @@ py -3.12 -m venv .venv
 | `bms-japan settings set KEY VALUE [--password P] [--yes]` | 設定値を 1 つ変更 |
 | `bms-japan switch charge\|discharge\|balance on\|off [--yes]` | 充電MOS・放電MOS・均等化の ON/OFF |
 | `bms-japan battery-type lfp\|ncm\|lto [--yes]` | 電池の種類（保護値がまとめて変わります） |
+| `bms-japan recommended leaf-standard\|leaf-long-life [--yes] [--accept-immediate-effect]` | おすすめ設定（日産リーフ）。保護値・温度・均等化・公称電圧がまとめて変わります（電流は変えません）。今のセル電圧で書き込むとすぐ放電・充電が止まる場合は、`--accept-immediate-effect` が無いと書き込みません |
 | `bms-japan password change [--old X --new Y] [--yes]` | パスワード変更（6 桁の数字） |
 | `bms-japan history [--page 0] [--pages 4] [--all]` | 故障履歴（1 ページ 7 件） |
 | `bms-japan capacity show` / `capacity set AH [--yes]` | 実容量（Ah） |
@@ -110,7 +111,7 @@ MCP サーバーのデモはプロセスが動いている間だけ残ります�
 | `get_history` | 故障履歴（`page`, `pages`。`next_page` が null なら終わり） |
 | `get_actual_capacity` | 実容量 |
 | `get_pack_summary` | 複数台のまとめ（parallel / series） |
-| `set_setting` / `set_switch` / `set_battery_type` / `change_password` / `set_actual_capacity` | 書き込み。まず `confirm` なしで呼んでプレビューと `confirm_token` を受け取り、利用者の同意を得てから **`confirm: true` と `confirm_token`** を付けて呼ぶ。初期値以外のパスワードなら `password` も必要 |
+| `set_setting` / `set_switch` / `set_battery_type` / `set_recommended_preset` / `change_password` / `set_actual_capacity` | 書き込み。まず `confirm` なしで呼んでプレビューと `confirm_token` を受け取り、利用者の同意を得てから **`confirm: true` と `confirm_token`** を付けて呼ぶ。初期値以外のパスワードなら `password` も必要 |
 
 `address` を省略すると、接続中の 1 台を使います。エラーは `[コード] 日本語メッセージ / English` の形で返ります。
 

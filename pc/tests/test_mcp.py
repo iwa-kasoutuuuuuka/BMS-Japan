@@ -24,13 +24,14 @@ EXPECTED_TOOLS = {
     "set_setting",
     "set_switch",
     "set_battery_type",
+    "set_recommended_preset",
     "change_password",
     "get_history",
     "get_actual_capacity",
     "set_actual_capacity",
     "get_pack_summary",
 }
-WRITE_TOOLS = {"set_setting", "set_switch", "set_battery_type", "change_password", "set_actual_capacity"}
+WRITE_TOOLS = {"set_setting", "set_switch", "set_battery_type", "set_recommended_preset", "change_password", "set_actual_capacity"}
 
 
 def _payload(result):

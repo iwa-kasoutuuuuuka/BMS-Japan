@@ -96,7 +96,7 @@ class SettingsTest {
         assertEquals(533, v[143 - 137])          // 4.10 × 13 × 10
         assertEquals(546, v[144 - 137])
         assertEquals(28000, v[148 - 137])        // 電流は今の値のまま
-        assertEquals(3000, v[163 - 137])
+        assertEquals(3900, v[163 - 137])         // 三元系の均等化開始電圧（元アプリの 3.0 V は直した）
         val frame = Modbus.writeRegisters(137, v)
         assertEquals(2 + 4 + 27 * 2 + 2, frame.size)   // バイト数フィールドなし
     }

@@ -26,6 +26,7 @@ from .labels import LIVE_LABELS, t
 from .protocol.history import HistoryRecord
 from .protocol.live import LiveData
 from .protocol.pack import PackMode, PackSummary
+from .protocol.recommended import RecommendedPreset, build_recommended_plan
 from .protocol.settings import (
     SETTINGS,
     SETTINGS_BY_KEY,
@@ -37,6 +38,7 @@ from .protocol.settings import (
     Setting,
     SwitchSetting,
     build_battery_preset,
+    safety_cell_count,
     validate,
 )
 from .simulator import DemoRegistry
@@ -659,6 +661,78 @@ async def set_battery_type(
             "values": got,
         },
         "verified": got == values,
+    }
+
+
+async def set_recommended_preset(
+    mgr: ConnectionManager,
+    preset: str,
+    password: str | None = None,
+    confirm: bool = False,
+    address: str | None = None,
+    confirm_token: str | None = None,
+    accept_immediate_effect: bool = False,
+) -> dict[str, Any]:
+    """おすすめ設定（日産リーフなど）をまとめて書き込む。電流の保護値は変えない"""
+    try:
+        rp = RecommendedPreset.from_name(preset)
+    except ValueError as e:
+        names = " / ".join(p.name.lower() for p in RecommendedPreset)
+        raise BmsJapanError("unknown_preset", f"不明なおすすめ設定です: {preset}（{names}）") from e
+    c = await mgr.client(address)
+    live = await _io(c.read_live())
+    current = await _io(c.read_settings())
+    n = safety_cell_count(current, live.cell_count)
+    if n is None or not rp.v.type.available_for(n):
+        raise BmsJapanError(
+            "preset_unavailable",
+            f"セル数（{n if n is not None else live.cell_count}）では {rp.v.label} は使えません（三元系は 20 セル以下）",
+        )
+    plan = build_recommended_plan(rp, n, current)
+    if plan is None:
+        raise BmsJapanError("settings_incomplete", "今の設定値を読み切れなかった（または安全範囲の確認を通らなかった）ため、書き込みを中止しました")
+    await _check_password(c, password)
+    effect = plan.immediate_effect(live.min_cell_voltage, live.max_cell_voltage)
+    warning = None
+    if effect == "discharge_stops":
+        warning = (
+            f"今のセル電圧（最低 {live.min_cell_voltage:.3f} V）は新しいセル低電圧の解除値 {plan.cell_uv_release:.2f} V より低いため、"
+            "書き込むとすぐに放電が止まります。先に充電することをおすすめします"
+        )
+    elif effect == "charge_stops":
+        warning = f"今のセル電圧（最高 {live.max_cell_voltage:.3f} V）は新しいセル過電圧 {plan.cell_ov:.2f} V 以上のため、書き込むとすぐに充電が止まります"
+    details = {
+        "preset": rp.name.lower(),
+        "label": rp.v.label,
+        "description": rp.v.description,
+        "cell_count": n,
+        "changes": plan.changes,
+        "block": {"start_register": 137, "values": plan.block},
+        "extra_registers": {str(r): v for r, v in plan.extra},
+        "immediate_effect": effect,
+        "warning": warning,
+        "note": "電流の保護値はそのままです。普段の充電を止める電圧は、充電器・インバーター側でこれより低く（目安: セル 4.05〜4.10 V）設定してください",
+    }
+    if effect is not None and confirm and not accept_immediate_effect:
+        raise BmsJapanError("immediate_effect", (warning or "") + "。それでも書き込む場合は accept_immediate_effect=true を付けてください")
+    pre = _gate(
+        mgr, c, "set_recommended_preset", {"preset": rp.name, "block": plan.block, "extra": plan.extra}, details,
+        f"おすすめ設定「{rp.v.label}」（{n} セル）を書き込みます。" + (f"注意: {warning}" if warning else ""), confirm, confirm_token,
+    )
+    if pre is not None:
+        return pre
+    await _io(c.write_registers(137, plan.block))
+    for reg, v in plan.extra:
+        await _io(c.write_register(reg, v))
+    after = await _io(c.read_settings())
+    got = [after.raw.get(137 + i) for i in range(len(plan.block))]
+    got_extra = {str(r): after.raw.get(r) for r, _ in plan.extra}
+    return {
+        **_header(c),
+        "ok": True,
+        "written": details,
+        "read_back": {"values": got, "extra_registers": got_extra},
+        "verified": got == plan.block and all(after.raw.get(r) == v for r, v in plan.extra),
     }
 
 

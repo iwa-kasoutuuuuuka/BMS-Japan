@@ -47,7 +47,7 @@ Unofficial tool for "Balance BMS" active-balancer lithium BMS over Bluetooth LE.
 1. scan_devices で BMS を探す（名前か広告データに JHB を含む機器）→ 2. connect(address) → 3. get_live_data などを呼ぶ。
    読み取りのツールは自動では接続しません（接続時に BMS へ時刻を書き込むため）。先に connect を呼んでください。
    address を省略すると、接続中の 1 台を使います。
-- 書き込み（set_setting / set_switch / set_battery_type / change_password / set_actual_capacity）は BMS の保護動作を変えます。
+- 書き込み（set_setting / set_switch / set_battery_type / set_recommended_preset / change_password / set_actual_capacity）は BMS の保護動作を変えます。
   手順: (1) confirm なしで呼ぶ → 予定内容と confirm_token が返る (2) 内容を利用者に見せて明示的な同意を得る
   (3) confirm=true と confirm_token を付けて呼ぶ。トークンは同じ内容に対して 120 秒以内・1 回だけ有効です。
   Writes change BMS protection behaviour: preview first, get explicit user approval, then call with confirm=true and the confirm_token.
@@ -284,6 +284,26 @@ async def set_battery_type(
     address: Address = None,
 ) -> dict[str, Any]:
     return await svc.set_battery_type(manager(), battery_type, password, confirm, address, confirm_token=confirm_token)
+
+
+@tool(
+    description="おすすめ設定（日産リーフなど）をまとめて書き込む。電池の種類・セル/総電圧の保護値・温度の保護値・均等化・公称電圧が変わる（電流は変えない）。"
+    "まず confirm なしで呼んで変更点と confirm_token を受け取り、利用者に変更点を見せて同意を得てから confirm=true と confirm_token を付けて呼ぶ。"
+    "今のセル電圧で書き込み直後に保護が働く場合（warning あり）は、利用者が理解したうえで accept_immediate_effect=true も必要。"
+    " Apply a recommended preset (e.g. Nissan Leaf modules). Requires confirm=true and confirm_token from the preview.",
+    **_ann(False, destructive=True, title="おすすめ設定 / Recommended preset"),
+)
+async def set_recommended_preset(
+    preset: Annotated[str, Field(description="leaf_standard（日産リーフ・標準: セル 3.00〜4.15 V）/ leaf_long_life（日産リーフ・長寿命: セル 3.30〜4.10 V）")],
+    confirm: Confirm = False,
+    confirm_token: ConfirmToken = None,
+    accept_immediate_effect: Annotated[bool, Field(description="書き込み直後に放電・充電が止まることを利用者が了承した場合だけ true")] = False,
+    password: Password = None,
+    address: Address = None,
+) -> dict[str, Any]:
+    return await svc.set_recommended_preset(
+        manager(), preset, password, confirm, address, confirm_token=confirm_token, accept_immediate_effect=accept_immediate_effect,
+    )
 
 
 @tool(

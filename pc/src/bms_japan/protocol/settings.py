@@ -154,11 +154,14 @@ class SwitchSetting(Enum):
 
 
 class BatteryType(Enum):
-    """値 = (コード, ラベル, セル過電圧解除, 保護, セル低電圧解除, 保護)"""
+    """値 = (コード, ラベル, セル過電圧解除, 保護, セル低電圧解除, 保護, 均等化開始電圧)
 
-    LFP = (0, "battery_lfp", 3.55, 3.60, 2.65, 2.60)
-    NCM = (1, "battery_ncm", 4.10, 4.20, 2.85, 2.82)
-    LTO = (2, "battery_lto", 2.65, 2.70, 1.85, 1.80)
+    均等化開始電圧: 元アプリは種類によらず 3.0 V を書くが、チタン酸では過電圧より高くなってしまうため種類ごとに決める
+    """
+
+    LFP = (0, "battery_lfp", 3.55, 3.60, 2.65, 2.60, 3.40)
+    NCM = (1, "battery_ncm", 4.10, 4.20, 2.85, 2.82, 3.90)
+    LTO = (2, "battery_lto", 2.65, 2.70, 1.85, 1.80, 2.50)
 
     @property
     def code(self) -> int:
@@ -183,6 +186,10 @@ class BatteryType(Enum):
     @property
     def cell_uv(self) -> float:
         return self.value[5]
+
+    @property
+    def balance_start(self) -> float:
+        return self.value[6]
 
     def available_for(self, cell_count: int) -> bool:
         """元アプリと同じ条件: 20 セルを超えると三元系、6 セル未満だとチタン酸は選べない"""
@@ -471,7 +478,7 @@ def build_battery_preset(btype: BatteryType, cell_count: int, current: BmsSettin
     put(144, pack_deci(btype.cell_ov))
     put(145, pack_deci(btype.cell_uv_release))
     put(146, pack_deci(btype.cell_uv))
-    put(163, 3000)
+    put(163, mv(btype.balance_start))
     return values
 
 
