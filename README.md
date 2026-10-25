@@ -70,6 +70,15 @@
 - Android 8.0（API 26）以上、Bluetooth LE 対応の端末
 - Balance BMS 対応の BMS（BLE モジュール付き）
 
+## ダウンロード（APK）
+
+ビルド済みの APK: [releases/BMS-Japan-0.8.1.apk](releases/BMS-Japan-0.8.1.apk)（約 9.5 MB）
+
+- ページを開いて「Download raw file」（下向き矢印）を押すとダウンロードできます
+- SHA-256: `28ce48aa3a93e8e85447ef785b590b4887745531b2299b010331ff433588460d`
+- デバッグ用の署名です。ストアを通していないため、インストール時に「不明なアプリ」の許可や Play プロテクトの警告が出ることがあります
+- 元アプリ（Balance BMS）が BMS につながっていると見えないので、元アプリを終了してから使ってください
+
 ## ビルド方法
 
 必要なもの: Android Studio（または Android SDK 36.1 と JDK 17 以上）
