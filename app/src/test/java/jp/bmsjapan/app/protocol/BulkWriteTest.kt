@@ -108,4 +108,32 @@ class BulkWriteTest {
         assertEquals(CellConditions(2.95, 3.30, 5, 30), CellConditions.worst(listOf(a, b, empty)))
         assertEquals(CellConditions.UNKNOWN, CellConditions.worst(listOf(empty)))
     }
+
+    @Test fun compareWrittenFindsRejectedRegisters() {
+        // 実機: 総電圧の保護値（143〜146）だけが前の値のまま残った
+        val steps = listOf(WriteStep(129, intArrayOf(3750)), WriteStep(143, intArrayOf(284, 287, 242, 231)))
+        val bms = mapOf(129 to intArrayOf(3750), 143 to intArrayOf(280, 283, 252, 234))
+        val m = compareWritten(steps) { bms[it.start] }
+        assertEquals(
+            listOf(
+                RegisterMismatch(143, 284, 280), RegisterMismatch(144, 287, 283),
+                RegisterMismatch(145, 242, 252), RegisterMismatch(146, 231, 234),
+            ),
+            m,
+        )
+        // 読めなかったときも食い違いとして返す
+        assertEquals(listOf(RegisterMismatch(129, 3750, null)), compareWritten(steps.take(1)) { null })
+    }
+
+    @Test fun describeRegisterGivesLabelAndValue() {
+        val ov = describeRegister(144)!!
+        assertEquals(Setting.PACK_OV.label, ov.label)
+        assertEquals(false, ov.isRelease)
+        assertEquals("28.3 V", ov.format(283))
+        val rel = describeRegister(145)!!
+        assertEquals(true, rel.isRelease)
+        assertEquals("NCM", describeRegister(137)!!.format(1))
+        assertEquals("OFF", describeRegister(166)!!.format(0))
+        assertEquals(null, describeRegister(9999))
+    }
 }

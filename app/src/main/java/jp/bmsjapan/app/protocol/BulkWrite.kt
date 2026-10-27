@@ -127,3 +127,40 @@ fun planBulk(
 }
 
 private fun presetRegistersPresent(s: BmsSettings): Boolean = (137 until 137 + 27).all { s.raw[it] != null }
+
+
+/** 書いた値と、書いた後に読み直した値が違ったレジスタ（BMS が受け付けなかった・自分で直した） */
+data class RegisterMismatch(val register: Int, val wrote: Int, val read: Int?)
+
+/** 書き込んだ内容と、読み直した値を比べる。readBack が null を返したレジスタ（読めなかった）も食い違いとして返す */
+fun compareWritten(steps: List<WriteStep>, readBack: (WriteStep) -> IntArray?): List<RegisterMismatch> =
+    steps.flatMap { st ->
+        val got = readBack(st)
+        st.values.indices.mapNotNull { i ->
+            val r = got?.getOrNull(i)
+            if (r != st.values[i]) RegisterMismatch(st.start + i, st.values[i], r) else null
+        }
+    }
+
+/** 表示用: そのレジスタの項目名と、生の値を表示値にする方法 */
+data class RegisterDescription(
+    @param:androidx.annotation.StringRes val label: Int,
+    val isRelease: Boolean,
+    val format: (Int) -> String,
+)
+
+fun describeRegister(register: Int): RegisterDescription? {
+    Setting.entries.firstOrNull { it.register == register }?.let { s ->
+        return RegisterDescription(s.label, false) { "${s.format(s.encoding.decode(it))} ${s.unit}".trim() }
+    }
+    Setting.entries.firstOrNull { it.releaseRegister == register }?.let { s ->
+        return RegisterDescription(s.label, true) { "${s.format(s.encoding.decode(it))} ${s.unit}".trim() }
+    }
+    SwitchSetting.entries.firstOrNull { it.register == register }?.let { sw ->
+        return RegisterDescription(sw.label, false) { if (it != 0) "ON" else "OFF" }
+    }
+    if (register == 137) {
+        return RegisterDescription(jp.bmsjapan.app.R.string.label_battery_type, false) { BatteryType.fromCode(it)?.name ?: it.toString() }
+    }
+    return null
+}

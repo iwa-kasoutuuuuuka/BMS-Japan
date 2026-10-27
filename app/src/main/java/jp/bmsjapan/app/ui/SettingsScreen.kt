@@ -52,6 +52,8 @@ import jp.bmsjapan.app.protocol.ActualCapacity
 import jp.bmsjapan.app.protocol.BatteryType
 import jp.bmsjapan.app.protocol.BulkOp
 import jp.bmsjapan.app.protocol.BulkSkip
+import jp.bmsjapan.app.protocol.RegisterMismatch
+import jp.bmsjapan.app.protocol.describeRegister
 import jp.bmsjapan.app.protocol.CellConditions
 import jp.bmsjapan.app.protocol.BmsSettings
 import jp.bmsjapan.app.protocol.LiveData
@@ -136,6 +138,7 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
     val actualCapacity by vm.actualCapacityMah.collectAsState()
     val bulkCount by vm.bulkTargetCount.collectAsState()
     val bulk by vm.bulk.collectAsState()
+    val writeReport by vm.writeReport.collectAsState()
     var switchToAll by remember { mutableStateOf(false) }
 
     val s = settings
@@ -341,6 +344,27 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
     }
 
     bulk?.let { BulkResultDialog(it, onDismiss = vm::dismissBulk) }
+
+    writeReport?.let { list ->
+        AlertDialog(
+            onDismissRequest = vm::dismissWriteReport,
+            title = { Text(stringResource(R.string.write_report_title)) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(stringResource(R.string.write_report_intro), style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    MismatchList(list)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.write_report_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = vm::dismissWriteReport) { Text(stringResource(R.string.action_close)) } },
+        )
+    }
 }
 
 @Composable
@@ -912,6 +936,8 @@ private fun BulkResultDialog(state: BulkState, onDismiss: () -> Unit) {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (state.finished) {
                     Text(stringResource(R.string.bulk_summary, state.rows.size, done), fontWeight = FontWeight.Medium)
+                    val partial = state.rows.count { (it.status as? BulkStatus.Skipped)?.mismatches?.isNotEmpty() == true }
+                    if (partial > 0) Text(stringResource(R.string.bulk_summary_partial, partial), style = MaterialTheme.typography.bodySmall)
                 } else {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                 }
@@ -944,6 +970,7 @@ private fun BulkResultDialog(state: BulkState, onDismiss: () -> Unit) {
                             style = MaterialTheme.typography.bodySmall,
                             color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        (row.status as? BulkStatus.Skipped)?.mismatches?.takeIf { it.isNotEmpty() }?.let { MismatchList(it) }
                     }
                 }
             }
@@ -952,4 +979,22 @@ private fun BulkResultDialog(state: BulkState, onDismiss: () -> Unit) {
             TextButton(enabled = state.finished, onClick = onDismiss) { Text(stringResource(R.string.action_close)) }
         },
     )
+}
+
+/** BMS が受け付けなかった項目の一覧（項目名: 書いた値 → 読み直した値） */
+@Composable
+private fun MismatchList(list: List<RegisterMismatch>) {
+    Column(Modifier.padding(start = 8.dp, top = 2.dp)) {
+        list.forEach { m ->
+            val d = describeRegister(m.register)
+            val name = d?.let { stringResource(it.label) + if (it.isRelease) stringResource(R.string.write_report_release) else "" }
+                ?: stringResource(R.string.write_report_register, m.register)
+            val wrote = d?.format?.invoke(m.wrote) ?: m.wrote.toString()
+            val read = m.read?.let { d?.format?.invoke(it) ?: it.toString() } ?: stringResource(R.string.write_report_unreadable)
+            Text(
+                stringResource(R.string.write_report_row, name, wrote, read),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
 }

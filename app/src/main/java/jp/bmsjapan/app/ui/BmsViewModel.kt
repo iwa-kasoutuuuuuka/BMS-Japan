@@ -23,7 +23,9 @@ import jp.bmsjapan.app.protocol.BulkPlan
 import jp.bmsjapan.app.protocol.BulkSkip
 import jp.bmsjapan.app.protocol.CellConditions
 import jp.bmsjapan.app.protocol.PresetImmediateEffect
+import jp.bmsjapan.app.protocol.RegisterMismatch
 import jp.bmsjapan.app.protocol.WriteStep
+import jp.bmsjapan.app.protocol.compareWritten
 import jp.bmsjapan.app.protocol.buildBatteryPresetSteps
 import jp.bmsjapan.app.protocol.immediateEffect
 import jp.bmsjapan.app.protocol.planBulk
@@ -549,11 +551,11 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
             _messages.tryEmit(UiMessage(R.string.msg_write_rejected))
             return
         }
-        runWrite { c -> c.writeRegister(setting.register, raw) }
+        runWrite { c -> listOf(WriteStep(setting.register, intArrayOf(raw))).also { c.writeSteps(it) } }
     }
 
     fun setSwitch(sw: SwitchSetting, on: Boolean) = runWrite { c ->
-        c.writeRegister(sw.register, if (on) 1 else 0)
+        listOf(WriteStep(sw.register, intArrayOf(if (on) 1 else 0))).also { c.writeSteps(it) }
     }
 
     /** 実容量（mAh）。読めなかったときは null */
@@ -561,7 +563,9 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
     val actualCapacityMah: StateFlow<Int?> = _actualCapacityMah.asStateFlow()
 
     fun writeActualCapacity(mAh: Int) = runWrite { c ->
+        // 実容量は別アドレス（0x81）。読み直しは設定の読み込みで行う（ここでは照合しない）
         c.writeRegisters(ActualCapacity.REGISTER, ActualCapacity.encode(mAh), Modbus.SLAVE_AUX)
+        emptyList()
     }
 
     /** プリセットに使うセル数（設定と運転データのセル数が食い違うときは null） */
@@ -582,7 +586,7 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
             _messages.tryEmit(UiMessage(R.string.msg_preset_bad_cells, cellCountText()))
             return
         }
-        runWrite { c -> c.writeSteps(steps) }
+        runWrite { c -> steps.also { c.writeSteps(it) } }
     }
 
     /** おすすめ設定の書き込み内容（画面での確認用）。セル数や設定が読めていなければ null */
@@ -606,13 +610,30 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
             _messages.tryEmit(UiMessage(R.string.msg_write_rejected))
             return
         }
-        runWrite { c -> c.writeSteps(plan.steps) }
+        runWrite { c -> plan.steps.also { c.writeSteps(it) } }
     }
 
     private suspend fun BmsConnection.writeSteps(steps: List<WriteStep>) {
         for (st in steps) {
             if (st.values.size == 1) writeRegister(st.start, st.values[0]) else writeRegisters(st.start, st.values)
         }
+    }
+
+    /**
+     * 書いた後に読み直して比べる。BMS は書き込みに「了解」と返しても、値を受け付けない（自分で直す）ことがあるため。
+     * 例: 実機では総電圧の保護値が、書いた値ではなく前の値のまま残った。
+     */
+    private suspend fun BmsConnection.verifySteps(steps: List<WriteStep>): List<RegisterMismatch> {
+        val got = steps.associateWith { st -> runCatching { readRegisters(st.start, st.values.size) }.getOrNull() }
+        return compareWritten(steps) { got[it] }
+    }
+
+    /** 1 台への書き込みで、BMS が受け付けなかった項目（画面にダイアログで出す） */
+    private val _writeReport = MutableStateFlow<List<RegisterMismatch>?>(null)
+    val writeReport: StateFlow<List<RegisterMismatch>?> = _writeReport.asStateFlow()
+
+    fun dismissWriteReport() {
+        _writeReport.value = null
     }
 
     /**
@@ -647,8 +668,11 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         return check
     }
 
-    /** 書き込み → 応答を確認 → 設定を読み直す */
-    private fun runWrite(block: suspend (BmsConnection) -> Unit) {
+    /**
+     * 書き込み → 応答を確認 → 書いたレジスタを読み直して照合 → 設定を読み直す。
+     * block は書き込んだ内容（照合に使う）を返す。
+     */
+    private fun runWrite(block: suspend (BmsConnection) -> List<WriteStep>) {
         val c = _connection.value
         if (c == null || _access.value !is SettingsAccess.Unlocked || _busy.value) {
             // 何もせずに戻ると、書き込んだと思われてしまうので知らせる
@@ -658,8 +682,14 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _busy.value = true
             try {
-                block(c)
-                _messages.tryEmit(UiMessage(R.string.msg_write_ok))
+                val steps = block(c)
+                val mismatches = c.verifySteps(steps)
+                if (mismatches.isEmpty()) {
+                    _messages.tryEmit(UiMessage(R.string.msg_write_ok))
+                } else {
+                    // 「設定しました」と出すと、変わったと思われてしまう
+                    _writeReport.value = mismatches
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "write failed", e)
                 _messages.tryEmit(UiMessage(R.string.msg_write_failed))
@@ -756,8 +786,8 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
                         failure = BulkSkip.WRITE_FAILED
                         c.writeSteps(plan.steps)
                         failure = BulkSkip.VERIFY_FAILED
-                        val verified = plan.steps.all { c.readRegisters(it.start, it.values.size).contentEquals(it.values) }
-                        if (verified) BulkStatus.Done else BulkStatus.Skipped(BulkSkip.VERIFY_FAILED)
+                        val mismatches = c.verifySteps(plan.steps)
+                        if (mismatches.isEmpty()) BulkStatus.Done else BulkStatus.Skipped(BulkSkip.VERIFY_FAILED, mismatches)
                     }
                 }
             }
@@ -862,7 +892,7 @@ sealed interface BulkStatus {
     data object Waiting : BulkStatus
     data object Running : BulkStatus
     data object Done : BulkStatus
-    data class Skipped(val reason: BulkSkip) : BulkStatus
+    data class Skipped(val reason: BulkSkip, val mismatches: List<RegisterMismatch> = emptyList()) : BulkStatus
 }
 
 data class BulkRow(val address: String, val name: String, val status: BulkStatus)

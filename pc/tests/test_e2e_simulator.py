@@ -362,3 +362,22 @@ async def test_recommended_with_generation(mgr):
     with pytest.raises(BmsJapanError) as e:
         await svc.set_recommended_preset(mgr, "leaf_standard", address="DEMO-01", generation="ze1_40", soh=150)
     assert e.value.code == "invalid_value"
+
+
+async def test_mismatches_reported_when_bms_ignores_registers(mgr):
+    # 実機では総電圧の保護値（143〜146）が書いた値にならなかった。シミュレーターで同じ状況を作る
+    sim_bms = sim(mgr)
+    orig = sim_bms.regs.__setitem__ if hasattr(sim_bms, "regs") else None
+    assert orig is not None
+    ignored = {143, 144, 145, 146}
+
+    class Regs(dict):
+        def __setitem__(self, k, v):
+            if k not in ignored:
+                super().__setitem__(k, v)
+
+    await svc.connect(mgr, "DEMO-01")
+    sim_bms.regs = Regs(sim_bms.regs)
+    r = await svc.set_recommended_preset(mgr, "leaf_standard", confirm=True, address="DEMO-01", accept_chemistry_change=True)
+    assert r["verified"] is False
+    assert {m["register"] for m in r["mismatches"]} == ignored

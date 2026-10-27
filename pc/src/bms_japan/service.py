@@ -394,6 +394,18 @@ class ConnectionManager:
 # ---- 操作 ----
 
 
+def _mismatches(after: BmsSettings, steps: list[tuple[int, list[int]]]) -> list[dict[str, Any]]:
+    """書いた値と、書いた後に読み直した値が違うレジスタ（BMS が受け付けなかった・自分で直した）。
+    実機では、総電圧の保護値（143〜146）が書いた値ではなく前の値のまま残ることがあった"""
+    out = []
+    for reg, vals in steps:
+        for i, v in enumerate(vals):
+            got = after.raw.get(reg + i)
+            if got != v:
+                out.append({"register": reg + i, "wrote": v, "read_back": got})
+    return out
+
+
 def _header(client: BmsClient) -> dict[str, Any]:
     return {"address": client.address, "name": client.name}
 
@@ -681,7 +693,8 @@ async def set_battery_type(
             "label": bt_after.label if bt_after else None,
             "values": got,
         },
-        "verified": all(after.raw.get(reg + i) == v for reg, vals in steps for i, v in enumerate(vals)),
+        "verified": not _mismatches(after, steps),
+        "mismatches": _mismatches(after, steps),
     }
 
 
@@ -816,7 +829,8 @@ async def set_recommended_preset(
         "ok": True,
         "written": details,
         "read_back": {"values": got, "extra_registers": got_extra},
-        "verified": got == plan.block and all(after.raw.get(r) == v for r, v in plan.extra),
+        "verified": not _mismatches(after, plan.steps),
+        "mismatches": _mismatches(after, plan.steps),
     }
 
 

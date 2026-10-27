@@ -151,6 +151,7 @@
     <string name="bulk_apply_all_note">1台ずつ順番に、その台の今の設定・セル数をもとに安全範囲を確認してから書き込み、読み直して確かめます。確認を通らない台は書き込みません。</string>
     <string name="bulk_title">全台への書き込み</string>
     <string name="bulk_summary">%1$d台中 %2$d台に書き込みました</string>
+    <string name="bulk_summary_partial">うち %1$d台は、一部の項目を BMS が受け付けませんでした（それ以外の項目は書き込まれています）</string>
     <string name="bulk_waiting">待機中</string>
     <string name="bulk_running">書き込み中…</string>
     <string name="bulk_done">完了（読み直して確認済み）</string>
@@ -165,7 +166,14 @@
     <string name="bulk_skip_chem_not_accepted">電池の種類が変わることの確認がないため、書き込みませんでした</string>
     <string name="msg_bulk_unavailable">全台に書き込むには、並列・直列で2台以上つないでください。書き込みはしていません</string>
     <string name="bulk_skip_write">書き込み中に失敗しました。途中まで書かれた可能性があるので、この台の設定画面で確認してください</string>
-    <string name="bulk_skip_verify">書き込み後に読み直した値が違いました。この台の設定画面で確認してください</string>
+    <string name="bulk_skip_verify">BMS が一部の値を受け付けませんでした（下の項目以外は書き込まれています）</string>
+    <string name="write_report_title">BMS が受け付けなかった項目</string>
+    <string name="write_report_intro">BMS は書き込みに応答しましたが、読み直すと次の項目は書いた値になっていませんでした（書いた値 → 今の値）。それ以外の項目は書き込まれています。</string>
+    <string name="write_report_note">BMS 本体が値を制限している（範囲外として受け付けない）可能性があります。表示されている「今の値」が BMS の設定です。保護が効く範囲かどうか確かめてください。</string>
+    <string name="write_report_row">・%1$s: %2$s → %3$s</string>
+    <string name="write_report_release">（解除値）</string>
+    <string name="write_report_register">レジスタ %1$d</string>
+    <string name="write_report_unreadable">読めませんでした</string>
     <string name="action_demo">デモ</string>
     <string name="theme_menu">表示モード</string>
     <string name="poll_menu">更新間隔</string>
