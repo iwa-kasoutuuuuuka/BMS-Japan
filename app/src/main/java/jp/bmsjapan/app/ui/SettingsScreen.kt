@@ -234,8 +234,11 @@ private fun SettingsList(vm: BmsViewModel, live: LiveData) {
                         SettingRow(
                             label = stringResource(setting.label),
                             value = value?.let { "${setting.format(it)} ${setting.unit}".trim() } ?: "--",
-                            caption = release?.let { stringResource(R.string.release_value, "${setting.format(it)} ${setting.unit}".trim()) },
-                            enabled = setting.editable && value != null && !busy,
+                            caption = listOfNotNull(
+                                release?.let { stringResource(R.string.release_value, "${setting.format(it)} ${setting.unit}".trim()) },
+                                if (setting.bmsDerived) stringResource(R.string.pack_derived_caption) else null,
+                            ).joinToString(" ・ ").ifEmpty { null },
+                            enabled = setting.editable && !setting.bmsDerived && value != null && !busy,
                             onClick = { editing = setting },
                         )
                     }
@@ -808,6 +811,8 @@ private fun RecommendedDialog(
                         }
                         Spacer(Modifier.height(8.dp))
                         Text(stringResource(R.string.recommended_note), style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(4.dp))
+                        Text(stringResource(R.string.recommended_pack_note), style = MaterialTheme.typography.bodySmall)
                         if (bulkCount > 1) {
                             ApplyToAllRow(bulkCount, toAll) { toAll = it; acknowledged = false }
                             if (toAll && p.options.ratedCapacityAh != null) {
@@ -954,6 +959,7 @@ private fun BulkResultDialog(state: BulkState, onDismiss: () -> Unit) {
                                 BulkSkip.READ_FAILED -> R.string.bulk_skip_read
                                 BulkSkip.OUT_OF_RANGE -> R.string.bulk_skip_range
                                 BulkSkip.BAD_CELLS -> R.string.bulk_skip_cells
+                                BulkSkip.BMS_DERIVED -> R.string.bulk_skip_derived
                                 BulkSkip.IMMEDIATE_EFFECT -> R.string.bulk_skip_effect
                                 BulkSkip.NO_LIVE_DATA -> R.string.bulk_skip_no_live
                                 BulkSkip.CHEMISTRY_MISMATCH -> R.string.bulk_skip_chem_mismatch

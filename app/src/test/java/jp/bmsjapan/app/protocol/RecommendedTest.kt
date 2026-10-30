@@ -113,4 +113,11 @@ class RecommendedTest {
         assertNull(buildRecommendedPlan(RecommendedPreset.LEAF_STANDARD, 21, lfp7()))   // 三元系は 20 セルまで
         assertNull(buildRecommendedPlan(RecommendedPreset.LEAF_STANDARD, 7, BmsSettings.EMPTY))
     }
+
+    @Test fun changeListHidesBmsDerivedPackVoltage() {
+        val plan = buildRecommendedPlan(RecommendedPreset.LEAF_STANDARD, 7, lfp7())!!
+        assertTrue(plan.changes.none { it.setting == Setting.PACK_OV || it.setting == Setting.PACK_UV })
+        // 書き込む値そのものには含まれる（BMS は無視するが、読めない機種のために送る内容は変えない）
+        assertEquals(291, plan.block[144 - 137])
+    }
 }

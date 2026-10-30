@@ -217,9 +217,13 @@ pc/
 python pc/tools/gen_strings.py app/src/main/res/values/strings.xml pc/src/bms_japan/strings_ja.py
 ```
 
+## 総電圧の保護値は書き込めません（`bms_derived`）
+
+BMS は、総電圧の保護値（`pack_ov` `pack_uv` と、それぞれの解除値）を、セルの保護値（`cell_ov` `cell_uv`）から自分で計算して決めます。直接書いても無視されるため、`set_setting pack_ov` などはエラー（`bms_derived`）にしています。総電圧を変えたいときは `cell_ov` `cell_uv` を変えてください（連動して変わります）。`get_settings` では、該当する項目に `bms_derived: true` が付きます。
+
 ## 書き込みの照合（`verified` と `mismatches`）
 
-書き込み系のツール・コマンドは、書き込んだあとに設定を読み直して照合します。一致すれば `verified: true`、違うレジスタがあれば `verified: false` と、`mismatches`（レジスタ番号・書いた値 `wrote`・読み直した値 `read_back`）を返します。BMS は書き込みに「了解」と返しても、値を受け付けないことがあります（実機では総電圧の保護値、レジスタ 143〜146 が書き換わりませんでした）。`verified: false` のときは、利用者に `mismatches` の内容（書いた値と今の値）を伝え、書き込めたと報告しないでください。
+書き込み系のツール・コマンドは、書き込んだあとに設定を読み直して照合します。一致すれば `verified: true`、違うレジスタがあれば `verified: false` と、`mismatches`（レジスタ番号・書いた値 `wrote`・読み直した値 `read_back`）を返します。BMS は書き込みに「了解」と返しても、値を受け付けないことがあります（総電圧の保護値、レジスタ 143〜146 は BMS が自動で決める項目なので、照合から除いています）。`verified: false` のときは、利用者に `mismatches` の内容（書いた値と今の値）を伝え、書き込めたと報告しないでください。
 
 ## MCP のセキュリティ上の注意
 

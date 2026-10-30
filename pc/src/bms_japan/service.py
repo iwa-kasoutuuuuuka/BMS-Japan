@@ -39,6 +39,7 @@ from .protocol.recommended import (
     rated_capacity_ah,
 )
 from .protocol.settings import (
+    BMS_DERIVED_REGISTERS,
     SETTINGS,
     SETTINGS_BY_KEY,
     ActualCapacity,
@@ -156,7 +157,8 @@ def setting_to_dict(s: Setting, current: BmsSettings) -> dict[str, Any]:
         "value": None if v is None else float(s.format(v)),
         "unit": s.unit,
         "decimals": s.decimals,
-        "editable": s.editable,
+        "editable": s.editable and not s.bms_derived,
+        "bms_derived": s.bms_derived,
     }
     if s.editable:
         d["min"] = s.min
@@ -400,6 +402,8 @@ def _mismatches(after: BmsSettings, steps: list[tuple[int, list[int]]]) -> list[
     out = []
     for reg, vals in steps:
         for i, v in enumerate(vals):
+            if reg + i in BMS_DERIVED_REGISTERS:
+                continue  # BMS が自動で決める項目（総電圧の保護値）は、書いた値と違っていても食い違いとして扱わない
             got = after.raw.get(reg + i)
             if got != v:
                 out.append({"register": reg + i, "wrote": v, "read_back": got})
@@ -529,8 +533,14 @@ async def set_setting(
 ) -> dict[str, Any]:
     setting = SETTINGS_BY_KEY.get(key.strip().lower())
     if setting is None:
-        keys = ", ".join(s.key for s in SETTINGS if s.editable)
+        keys = ", ".join(s.key for s in SETTINGS if s.editable and not s.bms_derived)
         raise BmsJapanError("unknown_setting", f"不明な設定項目です: {key}（使える項目: {keys}）")
+    if setting.bms_derived:
+        raise BmsJapanError(
+            "bms_derived",
+            f"{setting.label} は、BMS がセルの保護値（cell_ov / cell_uv）から自動で決めるため、直接は変更できません。"
+            "セルの保護値を変えると連動して変わります / derived by the BMS from the cell thresholds",
+        )
     if not setting.editable:
         raise BmsJapanError("not_editable", f"{setting.label} は表示のみで、変更できません / read-only setting")
     c = await mgr.client(address)

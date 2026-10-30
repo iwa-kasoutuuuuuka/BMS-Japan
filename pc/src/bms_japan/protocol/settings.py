@@ -77,6 +77,9 @@ class Setting:
     release_register: int | None = None
     release_rule: ReleaseRule = ReleaseRule.NONE
     editable: bool = True
+    #: BMS がセルの値から自分で計算して決める項目。書き込んでも無視される（実機で確認: 総電圧の保護値は、
+    #: セルの保護値を変えると連動して変わり、直接書いた値は元に戻る）
+    bms_derived: bool = False
 
     @property
     def label(self) -> str:
@@ -92,8 +95,8 @@ ABOVE, BELOW = ReleaseRule.ABOVE_RELEASE, ReleaseRule.BELOW_RELEASE
 SETTINGS: list[Setting] = [
     Setting("cell_ov", 140, "set_cell_ov", V, MILLI, 3, "V", 2.0, 4.5, 139, ABOVE),
     Setting("cell_uv", 142, "set_cell_uv", V, MILLI, 3, "V", 1.5, 3.5, 141, BELOW),
-    Setting("pack_ov", 144, "set_pack_ov", V, DECI, 1, "V", 1.0, 300.0, 143, ABOVE),
-    Setting("pack_uv", 146, "set_pack_uv", V, DECI, 1, "V", 1.0, 300.0, 145, BELOW),
+    Setting("pack_ov", 144, "set_pack_ov", V, DECI, 1, "V", 1.0, 300.0, 143, ABOVE, bms_derived=True),
+    Setting("pack_uv", 146, "set_pack_uv", V, DECI, 1, "V", 1.0, 300.0, 145, BELOW, bms_derived=True),
     Setting("cell_diff", 160, "set_cell_diff", V, MILLI, 3, "V", 0.010, 1.000, 159, ABOVE),
     Setting("charge_oc", 148, "set_charge_oc", A, CHARGE_CURRENT, 1, "A", 1.0, 500.0, 147),
     Setting("discharge_oc", 150, "set_discharge_oc", A, DISCHARGE_CURRENT, 1, "A", 1.0, 500.0, 149),
@@ -117,6 +120,11 @@ SETTINGS: list[Setting] = [
     Setting("temp_sensors", 134, "set_temp_sensors", SettingGroup.INFO, RAW, 0, "", 0.0, 0.0, editable=False),
 ]
 SETTINGS_BY_KEY: dict[str, Setting] = {s.key: s for s in SETTINGS}
+
+#: BMS が自動で決めるレジスタ（書き込んでも変わらないので、書き込み後の照合から除く）
+BMS_DERIVED_REGISTERS: frozenset[int] = frozenset(
+    r for s in SETTINGS if s.bms_derived for r in (s.register, s.release_register) if r is not None
+)
 
 
 class SwitchSetting(Enum):

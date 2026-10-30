@@ -25,6 +25,7 @@ import jp.bmsjapan.app.protocol.CellConditions
 import jp.bmsjapan.app.protocol.PresetImmediateEffect
 import jp.bmsjapan.app.protocol.RegisterMismatch
 import jp.bmsjapan.app.protocol.WriteStep
+import jp.bmsjapan.app.protocol.BMS_DERIVED_REGISTERS
 import jp.bmsjapan.app.protocol.compareWritten
 import jp.bmsjapan.app.protocol.buildBatteryPresetSteps
 import jp.bmsjapan.app.protocol.immediateEffect
@@ -544,6 +545,10 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun writeSetting(setting: Setting, raw: Int) {
+        if (setting.bmsDerived) {
+            _messages.tryEmit(UiMessage(R.string.msg_pack_derived))
+            return
+        }
         // 画面での確認に加えて、書き込み直前に最新の設定値でもう一度確かめる
         val s = _settings.value ?: return
         val check = setting.validateValue(setting.encoding.decode(raw), s, live.value?.cellCount)
@@ -625,7 +630,8 @@ class BmsViewModel(app: Application) : AndroidViewModel(app) {
      */
     private suspend fun BmsConnection.verifySteps(steps: List<WriteStep>): List<RegisterMismatch> {
         val got = steps.associateWith { st -> runCatching { readRegisters(st.start, st.values.size) }.getOrNull() }
-        return compareWritten(steps) { got[it] }
+        // 総電圧の保護値は BMS が自動で決めるので、書いた値と違っていても「受け付けなかった」とは扱わない
+        return compareWritten(steps, BMS_DERIVED_REGISTERS) { got[it] }
     }
 
     /** 1 台への書き込みで、BMS が受け付けなかった項目（画面にダイアログで出す） */

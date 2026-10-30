@@ -87,7 +87,7 @@ def print_settings(d: dict[str, Any]) -> None:
         extra = ""
         if s.get("release_value") is not None:
             extra = f"（解除 {s['release_value']:.{dec}f} {s['unit']}）"
-        rng = f"  範囲 {s['min']:.{dec}f}〜{s['max']:.{dec}f}" if s["editable"] else "  (表示のみ)"
+        rng = f"  範囲 {s['min']:.{dec}f}〜{s['max']:.{dec}f}" if s["editable"] else ("  (表示のみ: BMS がセルの値から自動計算)" if s.get("bms_derived") else "  (表示のみ)")
         _out(f"    {s['key']:<20} {s['label']}: {val}{extra}{rng}")
 
 

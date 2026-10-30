@@ -136,4 +136,19 @@ class BulkWriteTest {
         assertEquals("OFF", describeRegister(166)!!.format(0))
         assertEquals(null, describeRegister(9999))
     }
+
+    @Test fun packVoltageIsBmsDerivedAndNotWritten() {
+        assertEquals(setOf(143, 144, 145, 146), BMS_DERIVED_REGISTERS)
+        assertEquals(true, Setting.PACK_OV.bmsDerived)
+        assertEquals(false, Setting.CELL_OV.bmsDerived)
+        // 一括書き込みでも、総電圧の保護値は書かない
+        assertEquals(BulkPlan.Rejected(BulkSkip.BMS_DERIVED), planBulk(BulkOp.SetValue(Setting.PACK_OV, 28.7), lfp(), 7))
+    }
+
+    @Test fun derivedRegistersAreIgnoredWhenComparing() {
+        val steps = listOf(WriteStep(137, IntArray(27) { 1 }))
+        val bms = mapOf(137 to IntArray(27) { if (it in 6..9) 9 else 1 })   // 143〜146 だけ違う
+        assertEquals(4, compareWritten(steps) { bms[it.start] }.size)
+        assertEquals(emptyList<RegisterMismatch>(), compareWritten(steps, BMS_DERIVED_REGISTERS) { bms[it.start] })
+    }
 }

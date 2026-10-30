@@ -26,8 +26,8 @@ android {
         applicationId = "jp.bmsjapan.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.13.1"
+        versionCode = 17
+        versionName = "0.13.2"
     }
 
     signingConfigs {

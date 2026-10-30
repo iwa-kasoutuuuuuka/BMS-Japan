@@ -54,11 +54,16 @@ enum class Setting(
     val releaseRegister: Int? = null,
     val releaseRule: ReleaseRule = ReleaseRule.NONE,
     val editable: Boolean = true,
+    /**
+     * BMS がセルの値から自分で計算して決める項目。書き込んでも無視される（実機で確認: 総電圧の保護値は、
+     * セルの保護値を変えると連動して変わり、直接書いた値は元に戻る）。画面では表示のみにする。
+     */
+    val bmsDerived: Boolean = false,
 ) {
     CELL_OV(140, R.string.set_cell_ov, SettingGroup.VOLTAGE, Encoding.MILLI, 3, "V", 2.0, 4.5, 139, ReleaseRule.ABOVE_RELEASE),
     CELL_UV(142, R.string.set_cell_uv, SettingGroup.VOLTAGE, Encoding.MILLI, 3, "V", 1.5, 3.5, 141, ReleaseRule.BELOW_RELEASE),
-    PACK_OV(144, R.string.set_pack_ov, SettingGroup.VOLTAGE, Encoding.DECI, 1, "V", 1.0, 300.0, 143, ReleaseRule.ABOVE_RELEASE),
-    PACK_UV(146, R.string.set_pack_uv, SettingGroup.VOLTAGE, Encoding.DECI, 1, "V", 1.0, 300.0, 145, ReleaseRule.BELOW_RELEASE),
+    PACK_OV(144, R.string.set_pack_ov, SettingGroup.VOLTAGE, Encoding.DECI, 1, "V", 1.0, 300.0, 143, ReleaseRule.ABOVE_RELEASE, bmsDerived = true),
+    PACK_UV(146, R.string.set_pack_uv, SettingGroup.VOLTAGE, Encoding.DECI, 1, "V", 1.0, 300.0, 145, ReleaseRule.BELOW_RELEASE, bmsDerived = true),
     CELL_DIFF(160, R.string.set_cell_diff, SettingGroup.VOLTAGE, Encoding.MILLI, 3, "V", 0.010, 1.000, 159, ReleaseRule.ABOVE_RELEASE),
 
     CHARGE_OC(148, R.string.set_charge_oc, SettingGroup.CURRENT, Encoding.CHARGE_CURRENT, 1, "A", 1.0, 500.0, 147),
@@ -91,6 +96,10 @@ enum class Setting(
 }
 
 /** ON/OFF で切り替える項目 */
+/** BMS が自動で決めるレジスタ（書き込んでも変わらないので、書き込み後の照合から除く） */
+val BMS_DERIVED_REGISTERS: Set<Int> =
+    Setting.entries.filter { it.bmsDerived }.flatMap { listOfNotNull(it.register, it.releaseRegister) }.toSet()
+
 enum class SwitchSetting(val register: Int, @param:StringRes val label: Int, @param:StringRes val confirmOn: Int, @param:StringRes val confirmOff: Int) {
     CHARGE_MOS(165, R.string.label_charge_mos, R.string.confirm_charge_on, R.string.confirm_charge_off),
     DISCHARGE_MOS(166, R.string.label_discharge_mos, R.string.confirm_discharge_on, R.string.confirm_discharge_off),

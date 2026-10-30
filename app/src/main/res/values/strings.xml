@@ -152,6 +152,10 @@
     <string name="bulk_title">全台への書き込み</string>
     <string name="bulk_summary">%1$d台中 %2$d台に書き込みました</string>
     <string name="bulk_summary_partial">うち %1$d台は、一部の項目を BMS が受け付けませんでした（それ以外の項目は書き込まれています）</string>
+    <string name="pack_derived_caption">BMSが自動計算（セルの値から決まる）</string>
+    <string name="msg_pack_derived">総電圧の保護値は、BMS がセルの保護値から自動で決めるため、直接は変更できません。セル過電圧・セル低電圧を変えると連動して変わります</string>
+    <string name="recommended_pack_note">総電圧の保護値（高い・低いとき）は、BMS がセルの値から自動で決めます。書き込み後に BMS が決めた値になり、ここに出している値と少し違うことがあります。</string>
+    <string name="bulk_skip_derived">総電圧の保護値は BMS が自動で決めるため、書き込めません</string>
     <string name="bulk_waiting">待機中</string>
     <string name="bulk_running">書き込み中…</string>
     <string name="bulk_done">完了（読み直して確認済み）</string>

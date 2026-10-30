@@ -248,6 +248,8 @@ fun buildRecommendedPlan(
         changes += PresetChange(null, R.string.label_battery_type, beforeType?.name ?: "--", preset.type.name)
     }
     for (s in checked) {
+        // 総電圧の保護値は BMS が自動で決める（書いても無視される）ので、変更の一覧には出さない
+        if (s.bmsDerived) continue
         val b = current[s]
         val a = after[s]!!
         if (b == null || s.format(b) != s.format(a)) {

@@ -56,6 +56,9 @@ enum class BulkSkip {
     /** 書き込むとすぐ放電・充電が止まる（了承されていない） */
     IMMEDIATE_EFFECT,
 
+    /** BMS がセルの値から自動で決める項目（書き込んでも無視される） */
+    BMS_DERIVED,
+
     /** 運転データ（セル電圧・温度）が読めず、書き込み直後に保護が働くか判定できない */
     NO_LIVE_DATA,
 
@@ -92,7 +95,7 @@ fun planBulk(
     acceptImmediateEffect: Boolean = false,
     acceptChemistryChange: Boolean = false,
 ): BulkPlan = when (op) {
-    is BulkOp.SetValue -> when (val r = op.setting.validateValue(op.value, settings, liveCells)) {
+    is BulkOp.SetValue -> if (op.setting.bmsDerived) BulkPlan.Rejected(BulkSkip.BMS_DERIVED) else when (val r = op.setting.validateValue(op.value, settings, liveCells)) {
         is ValidationResult.Ok -> BulkPlan.Ok(listOf(WriteStep(op.setting.register, intArrayOf(r.raw))))
         ValidationResult.NeedsCellCount -> BulkPlan.Rejected(BulkSkip.BAD_CELLS)
         else -> BulkPlan.Rejected(BulkSkip.OUT_OF_RANGE)
@@ -133,12 +136,16 @@ private fun presetRegistersPresent(s: BmsSettings): Boolean = (137 until 137 + 2
 data class RegisterMismatch(val register: Int, val wrote: Int, val read: Int?)
 
 /** 書き込んだ内容と、読み直した値を比べる。readBack が null を返したレジスタ（読めなかった）も食い違いとして返す */
-fun compareWritten(steps: List<WriteStep>, readBack: (WriteStep) -> IntArray?): List<RegisterMismatch> =
+fun compareWritten(
+    steps: List<WriteStep>,
+    ignore: Set<Int> = emptySet(),
+    readBack: (WriteStep) -> IntArray?,
+): List<RegisterMismatch> =
     steps.flatMap { st ->
         val got = readBack(st)
         st.values.indices.mapNotNull { i ->
             val r = got?.getOrNull(i)
-            if (r != st.values[i]) RegisterMismatch(st.start + i, st.values[i], r) else null
+            if (st.start + i !in ignore && r != st.values[i]) RegisterMismatch(st.start + i, st.values[i], r) else null
         }
     }
 

@@ -44,4 +44,20 @@ class DemoBmsTest {
         assertEquals(5, second.records.size)
         assertTrue(second.reachedEnd)
     }
+
+    private fun settings() = BmsSettings.EMPTY.merge(
+        BmsSettings.MAIN_START,
+        (ask(Modbus.readRegisters(BmsSettings.MAIN_START, BmsSettings.MAIN_COUNT)) as BmsFrame.ReadResponse).registers,
+    )
+
+    @Test fun packVoltageIsDerivedFromCellValuesLikeTheRealBms() {
+        // 実機の BMS は総電圧の保護値を書き込みでは変えず、セルの保護値から自分で決める
+        val before = settings().raw[144]!!
+        ask(Modbus.writeRegister(144, before + 20))
+        assertEquals(before, settings().raw[144])
+        // セル過電圧を変えると、総電圧が連動して変わる
+        ask(Modbus.writeRegister(140, 3500))
+        val s = settings()
+        assertEquals((3500 * s.raw[130]!! / 100.0).toInt().toDouble(), s.raw[144]!!.toDouble(), 1.0)
+    }
 }

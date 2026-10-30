@@ -365,11 +365,9 @@ async def test_recommended_with_generation(mgr):
 
 
 async def test_mismatches_reported_when_bms_ignores_registers(mgr):
-    # 実機では総電圧の保護値（143〜146）が書いた値にならなかった。シミュレーターで同じ状況を作る
+    # BMS が一部のレジスタを受け付けない状況をシミュレーターで作る（セルの保護値 139・140）
     sim_bms = sim(mgr)
-    orig = sim_bms.regs.__setitem__ if hasattr(sim_bms, "regs") else None
-    assert orig is not None
-    ignored = {143, 144, 145, 146}
+    ignored = {139, 140}
 
     class Regs(dict):
         def __setitem__(self, k, v):
@@ -381,3 +379,21 @@ async def test_mismatches_reported_when_bms_ignores_registers(mgr):
     r = await svc.set_recommended_preset(mgr, "leaf_standard", confirm=True, address="DEMO-01", accept_chemistry_change=True)
     assert r["verified"] is False
     assert {m["register"] for m in r["mismatches"]} == ignored
+
+
+async def test_pack_voltage_is_derived_by_bms_not_a_mismatch(mgr):
+    # 総電圧の保護値（143〜146）は BMS が自動で決める。書いた値と違っても、食い違いとして警告しない
+    r = await svc.set_recommended_preset(mgr, "leaf_standard", confirm=True, address="DEMO-01", accept_chemistry_change=True)
+    assert r["verified"] is True and r["mismatches"] == []
+    keys = {c["key"] for c in r["written"]["changes"]}
+    assert "pack_ov" not in keys and "pack_uv" not in keys and "pack_ov_release" not in keys
+    # 代わりに、BMS がセルの値から決めた値になる（16 セル × 4.15 V）
+    s = await svc.get_settings(mgr, "DEMO-01")
+    vals = {x["key"]: x["value"] for x in s["settings"]}
+    assert vals["pack_ov"] == pytest.approx(66.4)
+
+
+async def test_set_setting_refuses_bms_derived_pack_voltage(mgr):
+    with pytest.raises(BmsJapanError) as e:
+        await svc.set_setting(mgr, "pack_ov", "58", confirm=True, address="DEMO-01")
+    assert e.value.code == "bms_derived"

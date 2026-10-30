@@ -284,6 +284,8 @@ def build_recommended_plan(
 
     for key in keys:
         s = SETTINGS_BY_KEY[key]
+        if s.bms_derived:
+            continue  # 総電圧の保護値は BMS が自動で決める（書いても無視される）ので、変更の一覧には出さない
         b, a = current.get(s), after.get(s)
         if fmt(s, b) != fmt(s, a):
             changes.append({"key": key, "label": s.label, "before": fmt(s, b), "after": fmt(s, a)})

@@ -35,6 +35,15 @@ class DemoBms(private val seed: Int = 0) {
         updateLive()
     }
 
+    /**
+     * 実機の BMS は、総電圧の保護値（143〜146）を書き込みでは変えず、セルの保護値（139〜142）から自分で決める。
+     * デモでは「セル値 × セル数」で近似する（実機はここから少し補正した値になる）。
+     */
+    private fun deriveBmsValues() {
+        val n = regs[130]
+        for (i in 0..3) regs[143 + i] = (regs[139 + i] * n / 100.0).roundToInt()
+    }
+
     /** 届いたフレームに対する応答を返す。応答しないフレームは null */
     fun handle(frame: ByteArray): ByteArray? {
         if (frame.size < 8 || !Modbus.isCrcValid(frame)) return null
@@ -50,14 +59,16 @@ class DemoBms(private val seed: Int = 0) {
                 if (addr in 256..399) historyPage(addr - 256) else readReply(Modbus.SLAVE_BMS, IntArray(count) { regs.getOrElse(addr + it) { 0 } })
             }
             Modbus.FN_WRITE_SINGLE -> {
-                if (addr < regs.size) regs[addr] = count
+                if (addr < regs.size && addr !in 143..146) regs[addr] = count
+                deriveBmsValues()
                 frame.copyOf()
             }
             Modbus.FN_WRITE_MULTI -> {
                 for (i in 0 until count) {
                     val r = addr + i
-                    if (r < regs.size && 6 + i * 2 + 1 < frame.size - 2) regs[r] = u16(frame, 6 + i * 2)
+                    if (r < regs.size && r !in 143..146 && 6 + i * 2 + 1 < frame.size - 2) regs[r] = u16(frame, 6 + i * 2)
                 }
+                deriveBmsValues()
                 Modbus.withCrc(frame.copyOfRange(0, 6))
             }
             else -> null

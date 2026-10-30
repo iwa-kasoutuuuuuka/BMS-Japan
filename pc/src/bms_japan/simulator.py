@@ -316,16 +316,27 @@ class FakeBms:
         if fn == mb.FN_WRITE_SINGLE:
             if a > self.MAX_REGISTER:
                 return None
-            self.regs[a] = b
+            if a not in (143, 144, 145, 146):
+                self.regs[a] = b
+            self._derive_bms_values()
             return f  # エコー
         if fn == mb.FN_WRITE_MULTI:
             start, count = a, b
             if start + count - 1 > self.MAX_REGISTER:
                 return None
             for i in range(count):
-                self.regs[start + i] = (f[6 + i * 2] << 8) | f[7 + i * 2]
+                if start + i not in (143, 144, 145, 146):
+                    self.regs[start + i] = (f[6 + i * 2] << 8) | f[7 + i * 2]
+            self._derive_bms_values()
             return mb.with_crc(bytes((mb.SLAVE_BMS, mb.FN_WRITE_MULTI)) + mb.u16(start) + mb.u16(count))
         return None
+
+    def _derive_bms_values(self) -> None:
+        """実機の BMS は、総電圧の保護値（143〜146）を書き込みでは変えず、セルの保護値（139〜142）から自分で決める。
+        シミュレーターでは「セル値 × セル数」で近似する（実機はここから少し補正した値になる）"""
+        n = self.regs[130]
+        for i in range(4):
+            self.regs[143 + i] = round(self.regs[139 + i] * n / 100)
 
     def _handle_aux(self, fn: int, start: int, count: int, f: bytes) -> bytes | None:
         """スレーブ 0x81（実容量）。応答は 0x51 から返る"""
